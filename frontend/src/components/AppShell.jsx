@@ -1,8 +1,14 @@
 import { useState } from "react"
+import { signOut } from "firebase/auth"
 import { NavLink, Outlet } from "react-router-dom"
+import { useAuth } from "../auth/AuthContext"
+import { auth } from "../lib/firebase"
 
 function AppShell() {
   const [sidebarExpanded, setSidebarExpanded] = useState(false)
+  const { user } = useAuth()
+  const userName = user?.displayName || user?.email || "there"
+  const avatarInitial = (user?.displayName || user?.email || "U").charAt(0).toUpperCase()
 
   return (
     <div className="workspace-root">
@@ -16,7 +22,7 @@ function AppShell() {
         onMouseEnter={() => setSidebarExpanded(true)}
         onMouseLeave={() => setSidebarExpanded(false)}
       >
-        <div className="sidebar-header">Toolbar</div>
+        <div className="sidebar-header">Hi, {userName}</div>
         <nav className="sidebar-nav">
           <NavLink to="/app/dashboard" className={({ isActive }) => `sidebar-item ${isActive ? "active" : ""}`}>
             <span className="sidebar-icon">D</span>
@@ -43,16 +49,16 @@ function AppShell() {
             <span className="sidebar-label">Community</span>
           </button>
         </nav>
-        <button type="button" className="sidebar-settings">
+        <button type="button" className="sidebar-settings" onClick={() => signOut(auth)}>
           <span className="sidebar-icon">S</span>
-          <span className="sidebar-label">Settings</span>
+          <span className="sidebar-label">Sign Out</span>
         </button>
       </aside>
 
       <main className="workspace-main">
         <header className="workspace-topbar">
           <NavLink className="profile-chip" to="/profile/account" aria-label="Open profile settings">
-            N
+            {avatarInitial}
           </NavLink>
         </header>
         <Outlet />

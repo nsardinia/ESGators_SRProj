@@ -1,4 +1,6 @@
+import { signOut } from "firebase/auth"
 import { NavLink, Outlet } from "react-router-dom"
+import { auth } from "../lib/firebase"
 
 function ProfileShell() {
   return (
@@ -24,6 +26,9 @@ function ProfileShell() {
           <NavLink className="profile-return-link" to="/app/dashboard">
             Return to App
           </NavLink>
+          <button type="button" className="profile-logout-button" onClick={() => signOut(auth)}>
+            Sign Out
+          </button>
         </div>
       </aside>
 
