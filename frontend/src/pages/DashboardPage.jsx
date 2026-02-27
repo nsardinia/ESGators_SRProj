@@ -5,7 +5,7 @@ function DashboardPage() {
   const [data, setData] = useState(null)
 
   useEffect(() => {
-    axios.get("http://localhost:5000/data")
+    axios.get("http://localhost:3000/data")
       .then(res => setData(res.data))
       .catch(err => console.error(err))
   }, [])

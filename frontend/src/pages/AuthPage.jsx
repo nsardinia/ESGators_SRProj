@@ -5,6 +5,8 @@ import { useAuth } from "../auth/AuthContext"
 import FirebaseConfigError from "../components/FirebaseConfigError"
 import { auth, isFirebaseConfigured } from "../lib/firebase"
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://srprojmwbe.fly.dev"
+
 function AuthPage() {
   const { user, loading } = useAuth()
   const location = useLocation()
@@ -46,7 +48,7 @@ function AuthPage() {
 
         // Temporary user sync: notify backend when a Firebase user registers.
         try {
-          await fetch("https://srprojmwbe.fly.dev/users", {
+          await fetch(`${API_BASE_URL}/users`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -54,6 +56,7 @@ function AuthPage() {
             body: JSON.stringify({
               email,
               name: trimmedName || credential.user.displayName || email.split("@")[0],
+              firebaseUid: credential.user.uid,
             }),
           })
         } catch (syncError) {
