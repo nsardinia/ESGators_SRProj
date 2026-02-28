@@ -93,6 +93,16 @@ create table if not exists public.users (
 );
 ```
 
+## 4-1. Configure Grafana Cloud (required for metrics push)
+
+If you use IoT endpoints (`/iot/data`, `/iot/dummy`) and want data to be pushed to Grafana Cloud, these `.env` values are required:
+
+- `GRAFANA_USERNAME`
+- `GRAFANA_API_KEY`
+- `GRAFANA_PUSH_URL` (example: `https://prometheus-prod-49-prod-ap-northeast-0.grafana.net/api/prom/push`)
+
+Without these values, the API still runs, but Grafana push is skipped.
+
 ## 5. Basic concepts in this starter
 
 ### `src/app.js`
@@ -178,6 +188,12 @@ fly apps create <your-app-name>
 
 ```bash
 fly secrets set SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+```
+
+If you use Grafana metrics push in Fly, set these secrets too:
+
+```bash
+fly secrets set GRAFANA_USERNAME=YOUR_INSTANCE_ID GRAFANA_API_KEY=YOUR_GRAFANA_TOKEN GRAFANA_PUSH_URL=https://prometheus-prod-49-prod-ap-northeast-0.grafana.net/api/prom/push
 ```
 
 ### Deploy
