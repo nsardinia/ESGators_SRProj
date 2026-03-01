@@ -1,3 +1,9 @@
+/**
+ * Fastify device provisioning endpoints.
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
+
 const crypto = require("node:crypto");
 
 const claimQuerySchema = {

@@ -1,3 +1,9 @@
+/**
+ * Fastify user management endpoints.
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
+
 const userBodySchema = {
   type: "object",
   required: ["email", "name", "firebaseUid"],

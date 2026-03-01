@@ -1,3 +1,9 @@
+/**
+ * Fastify index plugin registration endpoint to integrate dependencies for routes. 
+ * Handles connecting to Supabase, Firebase, and providing basic observability to CORS issues.
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
 const cors = require("@fastify/cors");
 const helmet = require("@fastify/helmet");
 const sensible = require("@fastify/sensible");

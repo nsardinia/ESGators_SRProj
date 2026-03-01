@@ -1,3 +1,8 @@
+/**
+ * Fastify backend routes index
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
 const devicesRoutes = require("./devices");
 const rootRoutes = require("./root");
 const usersRoutes = require("./users");

@@ -1,3 +1,9 @@
+/**
+ * Firebase configuration handled as fastify plugin. Allows all backend routes to interface with firebase using 
+ * service keys stored in firebaseServiceKeys.json (not public). Creates firebase connections.
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
 const fs = require("node:fs");
 const path = require("node:path");
 

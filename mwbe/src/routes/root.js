@@ -1,3 +1,11 @@
+/**
+ * Fastify basic functionality test endpoints
+ * 
+ * TODO: remove. 
+ * 
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
 async function rootRoutes(app) {
   app.get("/health", async () => {
     return {

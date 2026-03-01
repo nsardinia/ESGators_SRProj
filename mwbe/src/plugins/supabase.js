@@ -1,3 +1,8 @@
+/**
+ * Fastify plugin setup for Supabase, where our postgress database is hosted. 
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
 const { createClient } = require("@supabase/supabase-js");
 
 function registerSupabase(app) {
