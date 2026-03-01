@@ -412,7 +412,7 @@ async function devicesRoutes(app) {
           await firebaseAuth.deleteUser(firebaseUid);
         } catch (firebaseError) {
           // User may not exist in Auth yet if it never signed in.
-          if (firebaseError && firebaseError.code !== "auth/user-not-found") {
+          if (firebaseError && firebaseError.code !== "components/user-not-found") {
             app.log.warn({ firebaseError, firebaseUid }, "Failed to delete Firebase user");
           }
         }
