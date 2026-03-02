@@ -103,6 +103,13 @@ If you use IoT endpoints (`/iot/data`, `/iot/dummy`) and want data to be pushed 
 
 Without these values, the API still runs, but Grafana push is skipped.
 
+## 4-2. IoT Dummy API deprecation notice
+
+`mwbe` IoT dummy endpoints are now deprecated.
+
+- Deprecated in `mwbe`: `/iot/dummy`, `/iot/data`, `/iot/metrics`
+- Use `backend` service for dummy generation and Grafana metrics push tests.
+
 ## 5. Basic concepts in this starter
 
 ### `src/app.js`
