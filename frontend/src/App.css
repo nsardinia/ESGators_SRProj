@@ -64,6 +64,12 @@
   max-width: 56ch;
 }
 
+.splash-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .auth-root {
   min-height: 100vh;
   display: flex;
