@@ -1,3 +1,10 @@
+/**
+ * User preferences page shell
+ * 
+ * TODO: implement functionality. Store user preferences in supabase (postgress) table and fetch.
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
 function PreferencesPage() {
   return (
     <section className="profile-content">

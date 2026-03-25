@@ -1,3 +1,7 @@
 node_modules/
 firebase-key.json
 .env
+firebaseServiceKeys.json
+.history/
+frontend/.history/
+mwbe/.history/

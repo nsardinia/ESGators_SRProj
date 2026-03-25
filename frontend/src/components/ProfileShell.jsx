@@ -1,3 +1,8 @@
+/**
+ * Shell for user profile (seperate from dashboard). Wraps content with sidebar navigation tools for extensibility.
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
 import { signOut } from "firebase/auth"
 import { NavLink, Outlet } from "react-router-dom"
 import { auth } from "../lib/firebase"

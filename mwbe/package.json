@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "nodemon --watch src --ext js --exec node src/server.js",
     "start": "node src/server.js",
-    "test": "node --test",
-    "dummy:1h": "node scripts/dummy-hourly.js"
+    "test": "jest"
   },
   "keywords": [
     "fastify",
@@ -23,15 +22,15 @@
     "@fastify/cors": "latest",
     "@fastify/helmet": "latest",
     "@fastify/sensible": "latest",
+    "@fastify/swagger": "^9.5.1",
+    "@fastify/swagger-ui": "^5.2.3",
     "@supabase/supabase-js": "latest",
-    "axios": "^1.13.5",
     "dotenv": "latest",
     "fastify": "latest",
-    "prom-client": "latest",
-    "protobufjs": "^8.0.0",
-    "snappy": "^7.3.3"
+    "firebase-admin": "^13.6.1"
   },
   "devDependencies": {
+    "jest": "^30.3.0",
     "nodemon": "latest"
   }
 }

@@ -1,4 +1,4 @@
 node_modules
 .env
-.history/.env*
+.history/
 npm-debug.log*

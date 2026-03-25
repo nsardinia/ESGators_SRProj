@@ -1,3 +1,8 @@
+/**
+ * Server setup for backend application
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
 require("dotenv").config();
 
 const buildApp = require("./app");

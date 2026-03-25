@@ -1,7 +1,12 @@
+/**
+ * Shell for user dashboard. Wraps content with sidebar navigation tools for extensibility.
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
 import { useState } from "react"
 import { signOut } from "firebase/auth"
 import { NavLink, Outlet } from "react-router-dom"
-import { useAuth } from "../auth/AuthContext"
+import { useAuth } from "../components/AuthContext"
 import { auth } from "../lib/firebase"
 
 function AppShell() {
@@ -32,22 +37,10 @@ function AppShell() {
             <span className="sidebar-icon">N</span>
             <span className="sidebar-label">Node Map</span>
           </NavLink>
-          <button type="button" className="sidebar-item">
-            <span className="sidebar-icon">M</span>
-            <span className="sidebar-label">ML Features</span>
-          </button>
-          <button type="button" className="sidebar-item">
+          <NavLink to="/app/configuration" className={({ isActive }) => `sidebar-item ${isActive ? "active" : ""}`}>
             <span className="sidebar-icon">C</span>
             <span className="sidebar-label">Configuration</span>
-          </button>
-          <button type="button" className="sidebar-item">
-            <span className="sidebar-icon">P</span>
-            <span className="sidebar-label">Privacy</span>
-          </button>
-          <button type="button" className="sidebar-item">
-            <span className="sidebar-icon">U</span>
-            <span className="sidebar-label">Community</span>
-          </button>
+          </NavLink>
         </nav>
         <button type="button" className="sidebar-settings" onClick={() => signOut(auth)}>
           <span className="sidebar-icon">S</span>

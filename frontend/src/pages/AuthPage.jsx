@@ -1,9 +1,17 @@
-import { useState } from "react"
+/**
+ * Login Page
+ * 
+ * TODO: build out additional functionality (forgot password, etc)
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
+
+import { useEffect, useState } from "react"
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from "firebase/auth"
 import { Navigate, useLocation, useNavigate } from "react-router-dom"
-import { useAuth } from "../auth/AuthContext"
-import FirebaseConfigError from "../components/FirebaseConfigError"
-import { auth, isFirebaseConfigured } from "../lib/firebase"
+import { useAuth } from "../components/AuthContext"
+import { API_BASE_URL } from "../lib/api"
+import { auth, isFirebaseConfigured, notifyFirebaseConfigError } from "../lib/firebase"
 
 function AuthPage() {
   const { user, loading } = useAuth()
@@ -18,8 +26,12 @@ function AuthPage() {
 
   const destination = location.state?.from?.pathname ?? "/app/dashboard"
 
+  useEffect(() => {
+    notifyFirebaseConfigError()
+  }, [])
+
   if (!isFirebaseConfigured || !auth) {
-    return <FirebaseConfigError />
+    return null
   }
 
   if (loading) {
@@ -44,9 +56,9 @@ function AuthPage() {
           await updateProfile(credential.user, { displayName: trimmedName })
         }
 
-        // Temporary user sync: notify backend when a Firebase user registers.
+        // User sync: notify backend when a Firebase user registers.
         try {
-          await fetch("https://srprojmwbe.fly.dev/users", {
+          await fetch(`${API_BASE_URL}/users`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -54,6 +66,7 @@ function AuthPage() {
             body: JSON.stringify({
               email,
               name: trimmedName || credential.user.displayName || email.split("@")[0],
+              firebaseUid: credential.user.uid,
             }),
           })
         } catch (syncError) {

@@ -1,3 +1,8 @@
+/**
+ * Context manager for auth. Keeps user logged in during page refresh or new session.
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 import { onAuthStateChanged } from "firebase/auth"
 import { auth, isFirebaseConfigured } from "../lib/firebase"

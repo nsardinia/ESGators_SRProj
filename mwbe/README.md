@@ -70,6 +70,7 @@ Open:
 - `http://localhost:3000/`
 - `http://localhost:3000/health`
 - `http://localhost:3000/users`
+- `http://localhost:3000/docs`
 
 ## 4. Configure Supabase
 
@@ -128,6 +129,7 @@ Without these values, the API still runs, but Grafana push is skipped.
   - `@fastify/sensible` (helper errors/utilities)
   - `@fastify/helmet` (secure HTTP headers)
   - `@fastify/cors` (cross-origin browser access)
+  - Swagger/OpenAPI docs at `/docs`
   - Supabase plugin (`src/plugins/supabase.js`) that decorates `app.supabase`
 
 ### `src/routes/root.js`
@@ -146,6 +148,18 @@ Without these values, the API still runs, but Grafana push is skipped.
 - `npm run dev`: run with autoreload.
 - `npm start`: run normally (production-style startup).
 - `npm test`: placeholder for Node test runner.
+
+## Swagger Docs
+
+Swagger UI is available at:
+
+- `http://localhost:3000/docs`
+
+Raw OpenAPI JSON is available at:
+
+- `http://localhost:3000/documentation/json`
+
+If you deploy behind a public host, set `PUBLIC_API_BASE_URL` in `.env` so the generated server URL in Swagger matches the deployed API origin.
 
 ## Docker
 

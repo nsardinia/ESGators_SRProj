@@ -1,4 +1,13 @@
-import { useEffect } from "react"
+/**
+ * Dashboard Page
+ * 
+ * TODO: Replace with Grafana dashbaord.
+ * 
+ * Last Edit: Nicholas Sardinia, 3/1/2026
+ */
+import axios from "axios"
+import { useEffect, useState } from "react"
+import { API_BASE_URL } from "../lib/api"
 
 const grafanaDashboardUrl = import.meta.env.VITE_GRAFANA_DASHBOARD_URL
 
