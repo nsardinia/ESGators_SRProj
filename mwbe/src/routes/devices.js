@@ -545,3 +545,10 @@ async function devicesRoutes(app) {
 }
 
 module.exports = devicesRoutes;
+module.exports.helpers = {
+  createSecretHash,
+  generateDeviceId,
+  generateDeviceSecret,
+  isUuid,
+  verifySecret,
+};

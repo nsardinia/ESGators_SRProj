@@ -55,3 +55,4 @@ function registerPlugins(app) {
 }
 
 module.exports = registerPlugins;
+module.exports.buildCorsOrigin = buildCorsOrigin;
