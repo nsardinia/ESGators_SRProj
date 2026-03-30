@@ -52,7 +52,7 @@ function resolveBaseUrl() {
   }
 
   if (target === "fly") {
-    return process.env.DUMMY_BASE_URL_FLY || process.env.DUMMY_BASE_URL || "http://localhost:5000"
+    return "https://backend-bitter-morning-1805.fly.dev" || process.env.DUMMY_BASE_URL || "http://localhost:5000"
   }
 
   if (target === "local") {

@@ -1,0 +1,95 @@
+{
+  "air_quality": {
+    "displayName": "Air Quality",
+    "mode": "absolute",
+    "unit": "aqi",
+    "normalRange": {
+      "min": 0,
+      "max": 100
+    },
+    "warningRange": {
+      "min": 100,
+      "max": 150
+    },
+    "criticalRange": {
+      "min": 150,
+      "max": null
+    }
+  },
+  "no2": {
+    "displayName": "NO2",
+    "mode": "absolute",
+    "unit": "ppb",
+    "normalRange": {
+      "min": 0,
+      "max": 100
+    },
+    "warningRange": {
+      "min": 100,
+      "max": 150
+    },
+    "criticalRange": {
+      "min": 150,
+      "max": null
+    }
+  },
+  "temperature": {
+    "displayName": "Temperature",
+    "mode": "absolute",
+    "unit": "celsius",
+    "criticalRangeLow": {
+      "min": null,
+      "max": 18
+    },
+    "normalRange": {
+      "min": 18,
+      "max": 28
+    },
+    "warningRangeHigh": {
+      "min": 28,
+      "max": 35
+    },
+    "criticalRangeHigh": {
+      "min": 35,
+      "max": null
+    }
+  },
+  "humidity": {
+    "displayName": "Humidity",
+    "mode": "absolute",
+    "unit": "percent",
+    "criticalRangeLow": {
+      "min": null,
+      "max": 30
+    },
+    "normalRange": {
+      "min": 30,
+      "max": 60
+    },
+    "warningRangeHigh": {
+      "min": 60,
+      "max": 80
+    },
+    "criticalRangeHigh": {
+      "min": 80,
+      "max": null
+    }
+  },
+  "noise_levels": {
+    "displayName": "Noise Levels",
+    "mode": "absolute",
+    "unit": "dba",
+    "normalRange": {
+      "min": 0,
+      "max": 75
+    },
+    "warningRange": {
+      "min": 75,
+      "max": 90
+    },
+    "criticalRange": {
+      "min": 90,
+      "max": null
+    }
+  }
+}

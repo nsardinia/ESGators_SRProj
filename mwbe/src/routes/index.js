@@ -7,7 +7,6 @@ const devicesRoutes = require("./devices");
 const configurationRoutes = require("./configuration");
 const rootRoutes = require("./root");
 const usersRoutes = require("./users");
-const iotRoutes = require("./iot");
 
 function registerRoutes(app) {
   app.register(rootRoutes, { prefix: "/" });
