@@ -3,19 +3,26 @@ import DashboardPage from "./DashboardPage"
 
 describe("DashboardPage", () => {
   it("opens Grafana only when the user clicks the button", () => {
+    const dashboardUrl = "https://grafana.example.test/dashboard"
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null)
+    const previousDashboardUrl = import.meta.env.VITE_GRAFANA_DASHBOARD_URL
 
-    render(<DashboardPage />)
+    import.meta.env.VITE_GRAFANA_DASHBOARD_URL = dashboardUrl
+    try {
+      render(<DashboardPage />)
 
-    expect(openSpy).not.toHaveBeenCalled()
+      expect(openSpy).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole("button", { name: /open grafana dashboard/i }))
+      fireEvent.click(screen.getByRole("button", { name: /open grafana dashboard/i }))
 
-    expect(openSpy).toHaveBeenCalledTimes(1)
-    expect(openSpy).toHaveBeenCalledWith(
-      import.meta.env.VITE_GRAFANA_DASHBOARD_URL,
-      "_blank",
-      "noopener,noreferrer"
-    )
+      expect(openSpy).toHaveBeenCalledTimes(1)
+      expect(openSpy).toHaveBeenCalledWith(
+        dashboardUrl,
+        "_blank",
+        "noopener,noreferrer"
+      )
+    } finally {
+      import.meta.env.VITE_GRAFANA_DASHBOARD_URL = previousDashboardUrl
+    }
   })
 })
