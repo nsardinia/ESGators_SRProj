@@ -1,7 +1,7 @@
 const test = require("node:test")
 const assert = require("node:assert/strict")
 
-const { createApp, generateFallbackSensorReadings } = require("../index")
+const { createApp, generateFallbackSensorReadings, calculateEsgEnvironmentScore } = require("../index")
 
 class MockSupabaseQuery {
     constructor(rows) {
@@ -209,6 +209,50 @@ test("GET /iot/export/day returns fallback th CSV when DB is empty", async () =>
         assert.match(body, /sensor3,air_quality/)
         assert.match(body, /sensor1,no2/)
         assert.match(body, /sensor2,noise_levels/)
+    } finally {
+        await new Promise((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()))
+        })
+    }
+})
+
+test("calculateEsgEnvironmentScore uses AQI, NO2 and Noise weights", () => {
+    const score = calculateEsgEnvironmentScore({
+        airQuality: 40,
+        no2: 30,
+        noiseLevels: 20,
+    })
+
+    assert.equal(score, 66.7)
+})
+
+test("POST /iot/dummy includes esg_environment_score samples", async () => {
+    const app = createApp({
+        firebaseDb: null,
+        supabase: null,
+        pushMetricsToGrafana: async () => ({ pushed: 0, skipped: true }),
+    })
+    const { server, baseUrl } = await listen(app)
+
+    try {
+        const response = await fetch(`${baseUrl}/iot/dummy`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                count: 1,
+                min: 10,
+                max: 20,
+                seed: "esg-seed",
+            }),
+        })
+
+        assert.equal(response.status, 200)
+        const body = await response.json()
+        const esgSample = body.samples.find((sample) => sample.metric_type === "esg_environment_score")
+
+        assert.ok(esgSample)
+        assert.equal(esgSample.sensor_id, "dummy-sensor-1")
+        assert.equal(typeof esgSample.value, "number")
     } finally {
         await new Promise((resolve, reject) => {
             server.close((error) => (error ? reject(error) : resolve()))

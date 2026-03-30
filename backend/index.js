@@ -30,6 +30,12 @@ const sensorDataMetric = new promClient.Gauge({
     labelNames: ["sensor_id", "metric_type"],
 })
 
+const esgEnvironmentScoreMetric = new promClient.Gauge({
+    name: "esg_environment_score",
+    help: "Calculated ESG environment score by sensor",
+    labelNames: ["sensor_id"],
+})
+
 let writeRequestTypePromise
 
 function loadWriteRequestType() {
@@ -69,6 +75,17 @@ function createSeededRandom(seedValue) {
 
 function createRandomValueWithGenerator(min, max, randomFn) {
     return Number((randomFn() * (max - min) + min).toFixed(2))
+}
+
+function calculateEsgEnvironmentScore({ airQuality, no2, noiseLevels }) {
+    return Number(
+        (
+            100 -
+            (Number(airQuality) * 0.5 +
+                Number(no2) * 0.33 +
+                Number(noiseLevels) * 0.17)
+        ).toFixed(2)
+    )
 }
 
 function normalizeSamples(metricsJson) {
@@ -450,6 +467,7 @@ function createApp(options = {}) {
 
             for (let index = 1; index <= count; index += 1) {
                 const sensorId = `dummy-sensor-${index}`
+                const generatedValues = {}
 
                 METRIC_TYPES.forEach((sampleMetricType) => {
                     const value = createRandomValueWithGenerator(min, max, random)
@@ -457,11 +475,25 @@ function createApp(options = {}) {
                         { sensor_id: sensorId, metric_type: sampleMetricType },
                         value
                     )
+                    generatedValues[sampleMetricType] = value
                     samples.push({
                         sensor_id: sensorId,
                         metric_type: sampleMetricType,
                         value,
                     })
+                })
+
+                const esgEnvironmentScore = calculateEsgEnvironmentScore({
+                    airQuality: generatedValues.air_quality,
+                    no2: generatedValues.no2,
+                    noiseLevels: generatedValues.noise_levels,
+                })
+
+                esgEnvironmentScoreMetric.set({ sensor_id: sensorId }, esgEnvironmentScore)
+                samples.push({
+                    sensor_id: sensorId,
+                    metric_type: "esg_environment_score",
+                    value: esgEnvironmentScore,
                 })
             }
 
@@ -496,4 +528,5 @@ module.exports = {
     getExportWindow,
     pushMetricsToGrafana,
     storeSensorReading,
+    calculateEsgEnvironmentScore,
 }
