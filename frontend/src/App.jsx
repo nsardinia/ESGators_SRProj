@@ -44,7 +44,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<SplashPage />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/dashboard" element={<Navigate to="/app/dashboard" replace />} />
           <Route path="/auth" element={<AuthPage />} />
           <Route
             path="/app"

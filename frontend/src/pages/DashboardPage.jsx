@@ -1,15 +1,11 @@
 /**
  * Dashboard Page
- * 
- * TODO: Replace with Grafana dashbaord.
- * 
+ *
  * Last Edit: Nicholas Sardinia, 3/1/2026
  */
-import axios from "axios"
-import { useEffect, useState } from "react"
-import { API_BASE_URL } from "../lib/api"
+import { useState } from "react"
 
-const grafanaDashboardUrl = import.meta.env.VITE_GRAFANA_DASHBOARD_URL
+const grafanaDashboardUrl = import.meta.env.VITE_GRAFANA_DASHBOARD_URL?.trim()
 const backendBaseUrl = (import.meta.env.VITE_BACKEND_URL || "http://localhost:5000").replace(/\/$/, "")
 const exportRanges = [
   { key: "day", label: "Export Day CSV" },
@@ -21,6 +17,14 @@ const DashboardPage = () => {
   const [activeRange, setActiveRange] = useState("")
   const [statusMessage, setStatusMessage] = useState("")
   const [errorMessage, setErrorMessage] = useState("")
+
+  function handleOpenGrafana() {
+    if (!grafanaDashboardUrl) {
+      return
+    }
+
+    window.open(grafanaDashboardUrl, "_blank", "noopener,noreferrer")
+  }
 
   async function handleExport(range) {
     setActiveRange(range)
@@ -92,9 +96,13 @@ const DashboardPage = () => {
             Open the live Grafana dashboard in a new tab when you need the full metrics view.
           </p>
           {grafanaDashboardUrl ? (
-            <a className="secondary-action dashboard-link" href={grafanaDashboardUrl} target="_blank" rel="noreferrer">
+            <button
+              type="button"
+              className="secondary-action dashboard-link"
+              onClick={handleOpenGrafana}
+            >
               Open Grafana Dashboard
-            </a>
+            </button>
           ) : (
             <p className="export-error">
               Set <strong>VITE_GRAFANA_DASHBOARD_URL</strong> in <strong>frontend/.env</strong>.
