@@ -5,6 +5,7 @@
  */
 import { useState } from "react"
 import { useAuth } from "../components/AuthContext"
+import { BACKEND_API_BASE_URL } from "../lib/api"
 
 const exportRanges = [
   { key: "day", label: "Export Day CSV" },
@@ -42,10 +43,6 @@ function buildGrafanaDashboardUrl(baseUrl, user) {
   return dashboardUrl.toString()
 }
 
-function getBackendBaseUrl() {
-  return (import.meta.env.VITE_BACKEND_URL || "http://localhost:5000").replace(/\/$/, "")
-}
-
 const DashboardPage = () => {
   const { user } = useAuth()
   const [activeRange, setActiveRange] = useState("")
@@ -67,7 +64,7 @@ const DashboardPage = () => {
     setStatusMessage(`${range} export preparing...`)
 
     try {
-      const response = await fetch(`${getBackendBaseUrl()}/iot/export/${range}`)
+      const response = await fetch(`${BACKEND_API_BASE_URL}/iot/export/${range}`)
 
       if (!response.ok) {
         const text = await response.text()
