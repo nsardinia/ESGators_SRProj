@@ -10,12 +10,16 @@ const PRODUCTION_MWBE_API_BASE_URL = "https://srprojmwbe.fly.dev"
 const LOCAL_BACKEND_API_BASE_URL = "http://localhost:5000"
 const PRODUCTION_BACKEND_API_BASE_URL = "https://backend-bitter-morning-1805.fly.dev"
 
-function getApiBaseUrl() {
-  const explicitBaseUrl = (
+function normalizeBaseUrl(value) {
+  return String(value || "").trim().replace(/\/$/, "")
+}
+
+function resolveMwbeApiBaseUrl() {
+  const explicitBaseUrl = normalizeBaseUrl(
     import.meta.env.VITE_MWBE_API_BASE_URL ||
     import.meta.env.VITE_API_BASE_URL ||
     ""
-  ).trim()
+  )
 
   if (explicitBaseUrl) {
     return explicitBaseUrl
@@ -23,27 +27,27 @@ function getApiBaseUrl() {
 
   const apiTarget = import.meta.env.VITE_API_TARGET?.trim().toLowerCase()
 
-  if (apiTarget === "production") {
-    return (
-      import.meta.env.VITE_MWBE_API_PRODUCTION_BASE_URL?.trim() ||
-      import.meta.env.VITE_API_PRODUCTION_BASE_URL?.trim() ||
-      PRODUCTION_MWBE_API_BASE_URL
+  if (apiTarget === "local") {
+    return normalizeBaseUrl(
+      import.meta.env.VITE_MWBE_API_LOCAL_BASE_URL ||
+      import.meta.env.VITE_API_LOCAL_BASE_URL ||
+      LOCAL_MWBE_API_BASE_URL
     )
   }
 
-  return (
-    import.meta.env.VITE_MWBE_API_LOCAL_BASE_URL?.trim() ||
-    import.meta.env.VITE_API_LOCAL_BASE_URL?.trim() ||
-    LOCAL_MWBE_API_BASE_URL
+  return normalizeBaseUrl(
+    import.meta.env.VITE_MWBE_API_PRODUCTION_BASE_URL ||
+    import.meta.env.VITE_API_PRODUCTION_BASE_URL ||
+    PRODUCTION_MWBE_API_BASE_URL
   )
 }
 
-function getBackendApiBaseUrl() {
-  const explicitBaseUrl = (
+function resolveBackendApiBaseUrl() {
+  const explicitBaseUrl = normalizeBaseUrl(
     import.meta.env.VITE_BACKEND_API_BASE_URL ||
     import.meta.env.VITE_BACKEND_URL ||
     ""
-  ).trim()
+  )
 
   if (explicitBaseUrl) {
     return explicitBaseUrl
@@ -51,21 +55,21 @@ function getBackendApiBaseUrl() {
 
   const apiTarget = import.meta.env.VITE_API_TARGET?.trim().toLowerCase()
 
-  if (apiTarget === "production") {
-    return (
-      import.meta.env.VITE_BACKEND_API_PRODUCTION_BASE_URL?.trim() ||
-      PRODUCTION_BACKEND_API_BASE_URL
+  if (apiTarget === "local") {
+    return normalizeBaseUrl(
+      import.meta.env.VITE_BACKEND_API_LOCAL_BASE_URL ||
+      LOCAL_BACKEND_API_BASE_URL
     )
   }
 
-  return (
-    import.meta.env.VITE_BACKEND_API_LOCAL_BASE_URL?.trim() ||
-    LOCAL_BACKEND_API_BASE_URL
+  return normalizeBaseUrl(
+    import.meta.env.VITE_BACKEND_API_PRODUCTION_BASE_URL ||
+    PRODUCTION_BACKEND_API_BASE_URL
   )
 }
 
-const API_BASE_URL = getApiBaseUrl()
-const MWBE_API_BASE_URL = API_BASE_URL
-const BACKEND_API_BASE_URL = getBackendApiBaseUrl()
+const MWBE_API_BASE_URL = resolveMwbeApiBaseUrl()
+const BACKEND_API_BASE_URL = resolveBackendApiBaseUrl()
+const API_BASE_URL = MWBE_API_BASE_URL
 
 export { API_BASE_URL, BACKEND_API_BASE_URL, MWBE_API_BASE_URL }
