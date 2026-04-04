@@ -42,6 +42,13 @@ Optional MWBE sync config:
 - `MWBE_SYNC_INTERVAL_MS`
 - `MWBE_SYNC_ON_START`
 
+Optional Firebase RTDB sync config:
+- `FIREBASE_SERVICE_ACCOUNT_JSON`
+- `FIREBASE_DATABASE_URL`
+- `VITE_FIREBASE_PROJECT_ID`
+- `FIREBASE_DEVICE_ROOT_PATH`
+- `FIREBASE_SOURCE_NAME`
+
 Optional threshold override:
 - `SENSOR_THRESHOLDS_JSON`
 
@@ -68,6 +75,11 @@ MWBE_API_VALUE_FIELD=value
 MWBE_API_TIMESTAMP_FIELD=timestamp
 MWBE_SYNC_INTERVAL_MS=60000
 MWBE_SYNC_ON_START=false
+
+FIREBASE_DATABASE_URL=https://senior-project-esgators-default-rtdb.firebaseio.com
+VITE_FIREBASE_PROJECT_ID=senior-project-esgators
+FIREBASE_DEVICE_ROOT_PATH=devices
+FIREBASE_SOURCE_NAME=firebase-rtdb
 
 SENSOR_THRESHOLDS_JSON={"temperature":{"min":18,"max":28},"humidity":{"min":30,"max":60}}
 ```
@@ -153,6 +165,10 @@ Samples in red are marked as `critical`.
 ## Endpoints
 
 - `GET /iot/metrics`: Prometheus scrape endpoint
+- `GET /firebase/status`: Firebase sync config and last sync state
+- `GET /firebase/preview/:deviceId`: raw Firebase payload plus normalized Prometheus samples
+- `POST /firebase/sync`: sync all Firebase devices or one device via `deviceId`
+- `POST /firebase/sync/:deviceId`: sync one Firebase device into Prometheus metrics
 - `POST /iot/data`: manually ingest one sample
 - `POST /iot/data/batch`: ingest a batch of samples in one request
 - `POST /iot/dummy`: generate dummy sensor batches around the configured threshold ranges
@@ -204,6 +220,31 @@ Manual MWBE sync example:
 curl -X POST http://localhost:5000/mwbe/sync
 ```
 
+Firebase preview example:
+
+```bash
+curl http://localhost:5000/firebase/preview/dev_472584440bca1b56b0518a6620641d39
+```
+
+Firebase sync example:
+
+```bash
+curl -X POST http://localhost:5000/firebase/sync/dev_472584440bca1b56b0518a6620641d39
+```
+
+Current Firebase device mapping:
+
+- `sht30.latest.temperatureC` -> `temperature`
+- `sht30.latest.humidityPct` -> `humidity`
+- `no2.latest.raw` -> `no2`
+- `sound.latest.raw` -> `noise_levels`
+- `pms5003.latest.aqi` or `pms5003.latest.airQuality` -> `air_quality`
+
+If a Firebase `updatedAtMs` value is not an absolute Unix timestamp, the backend falls back to the current server time before sending the sample to Prometheus.
+
+If `backend/firebase-key.json` or `FIREBASE_SERVICE_ACCOUNT_JSON` is not available yet, the backend falls back to read-only Firebase REST GET using `FIREBASE_DATABASE_URL` or `VITE_FIREBASE_PROJECT_ID`.
+That fallback only works when RTDB security rules allow read access for the requested path.
+
 ## Prometheus metrics for Grafana
 
 This backend sends ESG and sensor values to Prometheus in the standard way by exposing `GET /iot/metrics`.
@@ -214,16 +255,16 @@ If those values are missing, ingestion still succeeds and the API response inclu
 
 Main metrics:
 
-- `sensor_data_metric{sensor_id,metric_type,source}`
+- `sensor_data_metric{sensor_id,metric_type,source,owner_uid,owner_email,device_name}`
 - `sensor_data_threshold_min{metric_type,unit}`
 - `sensor_data_threshold_max{metric_type,unit}`
-- `sensor_data_anomaly_flag{sensor_id,metric_type,source,severity}`
-- `sensor_data_anomaly_score{sensor_id,metric_type,source}`
-- `sensor_data_anomaly_total{sensor_id,metric_type,source,severity}`
-- `sensor_data_last_timestamp_ms{sensor_id,metric_type,source}`
+- `sensor_data_anomaly_flag{sensor_id,metric_type,source,owner_uid,owner_email,device_name,severity}`
+- `sensor_data_anomaly_score{sensor_id,metric_type,source,owner_uid,owner_email,device_name}`
+- `sensor_data_anomaly_total{sensor_id,metric_type,source,owner_uid,owner_email,device_name,severity}`
+- `sensor_data_last_timestamp_ms{sensor_id,metric_type,source,owner_uid,owner_email,device_name}`
 - `esg_environment_score{scope}`
 - `esg_environment_metric_score{metric_type}`
-- `esg_sensor_score{sensor_id}`
+- `esg_sensor_score{sensor_id,owner_uid,owner_email,device_name}`
 - `esg_buffer_size`
 - `mwbe_sync_runs_total{status}`
 - `mwbe_sync_duration_seconds`
@@ -251,6 +292,12 @@ Current sensor values:
 sensor_data_metric
 ```
 
+Current sensor values for the logged-in owner and selected device/metric:
+
+```promql
+sensor_data_metric{owner_uid="$owner_uid",sensor_id=~"$sensor_id",metric_type=~"$metric_type"}
+```
+
 Current ESG overall score:
 
 ```promql
@@ -267,6 +314,12 @@ ESG score by sensor:
 
 ```promql
 esg_sensor_score
+```
+
+ESG score by sensor for the logged-in owner:
+
+```promql
+esg_sensor_score{owner_uid="$owner_uid",sensor_id=~"$sensor_id"}
 ```
 
 Active anomalies only:
@@ -303,6 +356,12 @@ Average temperature over 15 minutes:
 
 ```promql
 avg_over_time(sensor_data_metric{metric_type="temperature"}[15m])
+```
+
+Average temperature over 15 minutes for the logged-in owner:
+
+```promql
+avg_over_time(sensor_data_metric{owner_uid="$owner_uid",metric_type="temperature",sensor_id=~"$sensor_id"}[15m])
 ```
 
 Latest critical anomaly count by sensor:

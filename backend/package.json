@@ -2,10 +2,10 @@
   "name": "backend",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "app.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node index.js",
+    "start": "node app.js",
+    "dev": "node app.js",
     "dummy": "node scripts/dummy.js",
     "anomaly": "node scripts/anomaly.js",
     "dummy:1h": "node scripts/dummy.js --count 60 --interval 60",

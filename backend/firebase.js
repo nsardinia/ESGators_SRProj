@@ -1,10 +1,40 @@
+require("dotenv").config()
+
 const admin = require("firebase-admin")
-const serviceAccount = require("./firebase-key.json")
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://esgators-3b0bc-default-rtdb.firebaseio.com/"
-})
+function loadServiceAccount() {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    return JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+  }
 
-const db = admin.database()
-module.exports = db
+  return require("./firebase-key.json")
+}
+
+function resolveDatabaseUrl(serviceAccount) {
+  if (process.env.FIREBASE_DATABASE_URL) {
+    return process.env.FIREBASE_DATABASE_URL
+  }
+
+  if (process.env.VITE_FIREBASE_DATABASE_URL) {
+    return process.env.VITE_FIREBASE_DATABASE_URL
+  }
+
+  const projectId = process.env.FIREBASE_PROJECT_ID || serviceAccount?.project_id
+
+  if (!projectId) {
+    throw new Error("Firebase database URL is not configured")
+  }
+
+  return `https://${projectId}-default-rtdb.firebaseio.com`
+}
+
+const serviceAccount = loadServiceAccount()
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: resolveDatabaseUrl(serviceAccount),
+  })
+}
+
+module.exports = admin.database()

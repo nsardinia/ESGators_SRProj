@@ -7,6 +7,7 @@ const axios = require("axios")
 const protobuf = require("protobufjs")
 const snappy = require("snappy")
 const promClient = require("prom-client")
+const { createSupabaseFromEnv } = require("./supabase")
 
 let db = null
 try {
@@ -23,6 +24,23 @@ const DEFAULT_THRESHOLDS = {
     humidity: { min: 30, max: 60, criticalMin: 30, warningMax: 80, criticalMax: 80, unit: "percent" },
     noise_levels: { min: 0, max: 75, warningMax: 90, criticalMax: 90, unit: "dba" },
 }
+const DEFAULT_FIREBASE_DEVICE_ROOT_PATH = "devices"
+const FIREBASE_TIMESTAMP_MIN_SECONDS = 946684800
+const FIREBASE_TIMESTAMP_MIN_MS = FIREBASE_TIMESTAMP_MIN_SECONDS * 1000
+const DEFAULT_DEVICE_OWNER_LABELS = {
+    owner_uid: "unknown",
+    owner_email: "unknown",
+    device_name: "unknown",
+}
+const FIREBASE_SENSOR_MAPPINGS = [
+    { bucket: "sht30", field: "temperatureC", metric_type: "temperature" },
+    { bucket: "sht30", field: "humidityPct", metric_type: "humidity" },
+    { bucket: "no2", field: "raw", metric_type: "no2" },
+    { bucket: "sound", field: "raw", metric_type: "noise_levels" },
+    { bucket: "air_quality", field: "raw", metric_type: "air_quality" },
+    { bucket: "pms5003", field: "aqi", metric_type: "air_quality" },
+    { bucket: "pms5003", field: "airQuality", metric_type: "air_quality" },
+]
 
 let writeRequestTypePromise
 
@@ -157,10 +175,103 @@ function createTimeSeries(metricName, labelsObject, value, timestamp) {
     }
 }
 
-function createApp() {
+function joinFirebasePath(...segments) {
+    return segments
+        .map((segment) => String(segment || "").trim())
+        .filter(Boolean)
+        .join("/")
+}
+
+function normalizeFirebaseTimestamp(rawTimestamp, fallbackTimestamp = Date.now()) {
+    const numeric = Number(rawTimestamp)
+
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        return Math.trunc(fallbackTimestamp)
+    }
+
+    if (numeric >= FIREBASE_TIMESTAMP_MIN_MS) {
+        return Math.trunc(numeric)
+    }
+
+    if (numeric >= FIREBASE_TIMESTAMP_MIN_SECONDS) {
+        return Math.trunc(numeric * 1000)
+    }
+
+    return Math.trunc(fallbackTimestamp)
+}
+
+function normalizeFirebaseDevicePayload(deviceId, payload, now = Date.now()) {
+    const defaultSensorId = String(
+        deviceId
+        || payload?.sht30?.latest?.deviceId
+        || payload?.no2?.latest?.deviceId
+        || payload?.sound?.latest?.deviceId
+        || payload?.pms5003?.latest?.deviceId
+        || payload?.air_quality?.latest?.deviceId
+        || ""
+    ).trim()
+
+    const samples = []
+
+    FIREBASE_SENSOR_MAPPINGS.forEach((mapping) => {
+        const latest = payload?.[mapping.bucket]?.latest
+
+        if (!latest) {
+            return
+        }
+
+        const numericValue = Number(latest?.[mapping.field])
+
+        if (!Number.isFinite(numericValue)) {
+            return
+        }
+
+        const sensorId = String(latest.deviceId || defaultSensorId || "").trim()
+
+        if (!sensorId) {
+            return
+        }
+
+        samples.push({
+            sensor_id: sensorId,
+            metric_type: mapping.metric_type,
+            value: numericValue,
+            timestamp: normalizeFirebaseTimestamp(
+                latest.updatedAtMs ?? latest.timestamp ?? latest.recordedAt,
+                now
+            ),
+        })
+    })
+
+    return samples
+}
+
+function isUuid(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        String(value || "")
+    )
+}
+
+function normalizeDeviceOwnerLabels(metadata = {}) {
+    return {
+        owner_uid: String(metadata.owner_uid || DEFAULT_DEVICE_OWNER_LABELS.owner_uid).trim()
+            || DEFAULT_DEVICE_OWNER_LABELS.owner_uid,
+        owner_email: String(metadata.owner_email || DEFAULT_DEVICE_OWNER_LABELS.owner_email).trim()
+            || DEFAULT_DEVICE_OWNER_LABELS.owner_email,
+        device_name: String(metadata.device_name || DEFAULT_DEVICE_OWNER_LABELS.device_name).trim()
+            || DEFAULT_DEVICE_OWNER_LABELS.device_name,
+    }
+}
+
+function createApp(options = {}) {
+    const firebaseDb = options.firebaseDb === undefined ? db : options.firebaseDb
+    const supabase = options.supabase === undefined ? createSupabaseFromEnv() : options.supabase
     const app = express()
     const registry = new promClient.Registry()
     const state = {
+        lastFirebaseSync: null,
+        lastFirebaseError: null,
+        lastFirebaseSamples: [],
         lastMwbeSync: null,
         lastMwbeError: null,
         lastMwbeSamples: [],
@@ -178,7 +289,7 @@ function createApp() {
     const sensorDataMetric = new promClient.Gauge({
         name: "sensor_data_metric",
         help: "IoT sensor data by metric type",
-        labelNames: ["sensor_id", "metric_type", "source"],
+        labelNames: ["sensor_id", "metric_type", "source", "owner_uid", "owner_email", "device_name"],
         registers: [registry],
     })
 
@@ -199,28 +310,28 @@ function createApp() {
     const sensorDataAnomalyFlagMetric = new promClient.Gauge({
         name: "sensor_data_anomaly_flag",
         help: "Whether the latest sample is outside its normal range",
-        labelNames: ["sensor_id", "metric_type", "source", "severity"],
+        labelNames: ["sensor_id", "metric_type", "source", "owner_uid", "owner_email", "device_name", "severity"],
         registers: [registry],
     })
 
     const sensorDataAnomalyScoreMetric = new promClient.Gauge({
         name: "sensor_data_anomaly_score",
         help: "Relative anomaly score based on deviation from threshold",
-        labelNames: ["sensor_id", "metric_type", "source"],
+        labelNames: ["sensor_id", "metric_type", "source", "owner_uid", "owner_email", "device_name"],
         registers: [registry],
     })
 
     const sensorDataLastTimestampMetric = new promClient.Gauge({
         name: "sensor_data_last_timestamp_ms",
         help: "Timestamp in milliseconds of the latest ingested sample",
-        labelNames: ["sensor_id", "metric_type", "source"],
+        labelNames: ["sensor_id", "metric_type", "source", "owner_uid", "owner_email", "device_name"],
         registers: [registry],
     })
 
     const sensorDataAnomalyTotalMetric = new promClient.Counter({
         name: "sensor_data_anomaly_total",
         help: "Total anomaly count by sensor and severity",
-        labelNames: ["sensor_id", "metric_type", "source", "severity"],
+        labelNames: ["sensor_id", "metric_type", "source", "owner_uid", "owner_email", "device_name", "severity"],
         registers: [registry],
     })
 
@@ -241,7 +352,7 @@ function createApp() {
     const esgSensorScoreMetric = new promClient.Gauge({
         name: "esg_sensor_score",
         help: "Calculated ESG score by sensor",
-        labelNames: ["sensor_id"],
+        labelNames: ["sensor_id", "owner_uid", "owner_email", "device_name"],
         registers: [registry],
     })
 
@@ -292,6 +403,26 @@ function createApp() {
                 noise_levels: 1,
                 ...parseJsonEnv(process.env.ESG_METRIC_WEIGHTS_JSON, {}),
             },
+        }
+    }
+
+    function getFirebaseConfig() {
+        const databaseUrl = String(
+            process.env.FIREBASE_DATABASE_URL
+            || process.env.VITE_FIREBASE_DATABASE_URL
+            || (
+                process.env.VITE_FIREBASE_PROJECT_ID
+                    ? `https://${process.env.VITE_FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com`
+                    : ""
+            )
+        ).replace(/\/$/, "")
+
+        return {
+            databaseUrl,
+            deviceRootPath: String(
+                process.env.FIREBASE_DEVICE_ROOT_PATH || DEFAULT_FIREBASE_DEVICE_ROOT_PATH
+            ).replace(/^\/+|\/+$/g, ""),
+            source: String(process.env.FIREBASE_SOURCE_NAME || "firebase-rtdb"),
         }
     }
 
@@ -445,6 +576,7 @@ function createApp() {
 
         const metricBuckets = {}
         const sensorBuckets = {}
+        const sensorLabels = {}
 
         bufferedSamples.forEach((sample) => {
             metricBuckets[sample.metric_type] = metricBuckets[sample.metric_type] || []
@@ -452,6 +584,8 @@ function createApp() {
 
             sensorBuckets[sample.sensor_id] = sensorBuckets[sample.sensor_id] || []
             sensorBuckets[sample.sensor_id].push(sample.esg_score)
+
+            sensorLabels[sample.sensor_id] = normalizeDeviceOwnerLabels(sample)
         })
 
         const metricScores = {}
@@ -476,7 +610,13 @@ function createApp() {
             const average = scores.reduce((sum, value) => sum + value, 0) / scores.length
             const rounded = Number(average.toFixed(2))
             sensorScores[sensorId] = rounded
-            esgSensorScoreMetric.set({ sensor_id: sensorId }, rounded)
+            esgSensorScoreMetric.set(
+                {
+                    sensor_id: sensorId,
+                    ...normalizeDeviceOwnerLabels(sensorLabels[sensorId]),
+                },
+                rounded
+            )
         })
 
         const overall = totalWeight > 0
@@ -501,12 +641,15 @@ function createApp() {
         const timeseries = []
 
         samples.forEach((sample) => {
+            const ownerLabels = normalizeDeviceOwnerLabels(sample)
+
             timeseries.push(createTimeSeries(
                 "sensor_data_metric",
                 {
                     sensor_id: sample.sensor_id,
                     metric_type: sample.metric_type,
                     source: sample.source,
+                    ...ownerLabels,
                 },
                 sample.value,
                 sample.timestamp
@@ -518,6 +661,7 @@ function createApp() {
                     sensor_id: sample.sensor_id,
                     metric_type: sample.metric_type,
                     source: sample.source,
+                    ...ownerLabels,
                 },
                 sample.anomaly.score,
                 sample.timestamp
@@ -529,6 +673,7 @@ function createApp() {
                     sensor_id: sample.sensor_id,
                     metric_type: sample.metric_type,
                     source: sample.source,
+                    ...ownerLabels,
                     severity: "warning",
                 },
                 sample.anomaly.detected && sample.anomaly.severity === "warning" ? 1 : 0,
@@ -541,6 +686,7 @@ function createApp() {
                     sensor_id: sample.sensor_id,
                     metric_type: sample.metric_type,
                     source: sample.source,
+                    ...ownerLabels,
                     severity: "critical",
                 },
                 sample.anomaly.detected && sample.anomaly.severity === "critical" ? 1 : 0,
@@ -607,6 +753,82 @@ function createApp() {
         return { pushed: timeseries.length, skipped: false }
     }
 
+    async function loadDeviceOwnerMetadataMap(sensorIds) {
+        const uniqueSensorIds = [...new Set(
+            (sensorIds || [])
+                .map((sensorId) => String(sensorId || "").trim())
+                .filter(Boolean)
+        )]
+
+        if (!supabase || uniqueSensorIds.length === 0) {
+            return new Map()
+        }
+
+        const metadataBySensorId = new Map()
+
+        const { data: devices, error: devicesError } = await supabase
+            .from("devices")
+            .select("device_id, owner_uid, name")
+            .in("device_id", uniqueSensorIds)
+
+        if (devicesError) {
+            console.warn(`Failed to load device owner metadata: ${devicesError.message}`)
+            return metadataBySensorId
+        }
+
+        const ownerKeys = [...new Set((devices || []).map((device) => device.owner_uid).filter(Boolean))]
+        const ownersByKey = new Map()
+
+        const ownerUuidKeys = ownerKeys.filter(isUuid)
+        if (ownerUuidKeys.length > 0) {
+            const { data: ownersById, error: ownersByIdError } = await supabase
+                .from("users")
+                .select("id, email, firebase_uid")
+                .in("id", ownerUuidKeys)
+
+            if (ownersByIdError) {
+                console.warn(`Failed to load owner metadata by user id: ${ownersByIdError.message}`)
+            } else {
+                ;(ownersById || []).forEach((owner) => {
+                    ownersByKey.set(owner.id, owner)
+                    if (owner.firebase_uid) {
+                        ownersByKey.set(owner.firebase_uid, owner)
+                    }
+                })
+            }
+        }
+
+        const ownerFirebaseUidKeys = ownerKeys.filter((ownerKey) => !isUuid(ownerKey))
+        if (ownerFirebaseUidKeys.length > 0) {
+            const { data: ownersByFirebaseUid, error: ownersByFirebaseUidError } = await supabase
+                .from("users")
+                .select("id, email, firebase_uid")
+                .in("firebase_uid", ownerFirebaseUidKeys)
+
+            if (ownersByFirebaseUidError) {
+                console.warn(`Failed to load owner metadata by firebase uid: ${ownersByFirebaseUidError.message}`)
+            } else {
+                ;(ownersByFirebaseUid || []).forEach((owner) => {
+                    ownersByKey.set(owner.id, owner)
+                    if (owner.firebase_uid) {
+                        ownersByKey.set(owner.firebase_uid, owner)
+                    }
+                })
+            }
+        }
+
+        ;(devices || []).forEach((device) => {
+            const owner = ownersByKey.get(device.owner_uid)
+            metadataBySensorId.set(device.device_id, normalizeDeviceOwnerLabels({
+                owner_uid: owner?.firebase_uid || device.owner_uid || DEFAULT_DEVICE_OWNER_LABELS.owner_uid,
+                owner_email: owner?.email || DEFAULT_DEVICE_OWNER_LABELS.owner_email,
+                device_name: device.name || device.device_id || DEFAULT_DEVICE_OWNER_LABELS.device_name,
+            }))
+        })
+
+        return metadataBySensorId
+    }
+
     function createIngestionResult(source, sample) {
         const sensorId = String(sample.sensor_id)
         const metricType = String(sample.metric_type).toLowerCase()
@@ -614,27 +836,55 @@ function createApp() {
         const timestamp = Number.isFinite(Number(sample.timestamp))
             ? Math.trunc(Number(sample.timestamp))
             : Date.now()
+        const ownerLabels = normalizeDeviceOwnerLabels(sample)
         const anomaly = evaluateAnomaly(metricType, numericValue)
 
         sensorDataMetric.set(
-            { sensor_id: sensorId, metric_type: metricType, source },
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source,
+                ...ownerLabels,
+            },
             numericValue
         )
         sensorDataAnomalyScoreMetric.set(
-            { sensor_id: sensorId, metric_type: metricType, source },
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source,
+                ...ownerLabels,
+            },
             anomaly.score
         )
         sensorDataLastTimestampMetric.set(
-            { sensor_id: sensorId, metric_type: metricType, source },
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source,
+                ...ownerLabels,
+            },
             timestamp
         )
 
         sensorDataAnomalyFlagMetric.set(
-            { sensor_id: sensorId, metric_type: metricType, source, severity: "warning" },
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source,
+                ...ownerLabels,
+                severity: "warning",
+            },
             anomaly.isAnomaly && anomaly.severity === "warning" ? 1 : 0
         )
         sensorDataAnomalyFlagMetric.set(
-            { sensor_id: sensorId, metric_type: metricType, source, severity: "critical" },
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source,
+                ...ownerLabels,
+                severity: "critical",
+            },
             anomaly.isAnomaly && anomaly.severity === "critical" ? 1 : 0
         )
 
@@ -643,6 +893,7 @@ function createApp() {
                 sensor_id: sensorId,
                 metric_type: metricType,
                 source,
+                ...ownerLabels,
                 severity: anomaly.severity,
             })
         }
@@ -653,6 +904,7 @@ function createApp() {
             value: numericValue,
             source,
             timestamp,
+            ...ownerLabels,
             esg_score: computeSampleEsgScore({
                 detected: anomaly.isAnomaly,
                 severity: anomaly.severity,
@@ -670,10 +922,20 @@ function createApp() {
     async function ingestSamples(samples, source) {
         const accepted = []
         const rejected = []
+        const ownerMetadataBySensorId = await loadDeviceOwnerMetadataMap(
+            samples.map((sample) => sample?.sensor_id)
+        )
 
         samples.forEach((sample, index) => {
             const metricType = String(sample.metric_type ?? "").toLowerCase()
             const numericValue = Number(sample.value)
+            const sensorId = String(sample.sensor_id || "")
+            const ownerMetadata = normalizeDeviceOwnerLabels({
+                ...ownerMetadataBySensorId.get(sensorId),
+                owner_uid: sample.owner_uid || ownerMetadataBySensorId.get(sensorId)?.owner_uid,
+                owner_email: sample.owner_email || ownerMetadataBySensorId.get(sensorId)?.owner_email,
+                device_name: sample.device_name || ownerMetadataBySensorId.get(sensorId)?.device_name || sensorId,
+            })
 
             if (!sample.sensor_id || !METRIC_TYPES.includes(metricType) || !Number.isFinite(numericValue)) {
                 rejected.push({
@@ -685,11 +947,12 @@ function createApp() {
             }
 
             accepted.push(createIngestionResult(source, {
-                sensor_id: sample.sensor_id,
-                metric_type: metricType,
-                value: numericValue,
-                timestamp: sample.timestamp,
-            }))
+                    sensor_id: sample.sensor_id,
+                    metric_type: metricType,
+                    value: numericValue,
+                    timestamp: sample.timestamp,
+                    ...ownerMetadata,
+                }))
         })
 
         let pushResult = { pushed: 0, skipped: true, reason: "no_valid_samples" }
@@ -788,6 +1051,116 @@ function createApp() {
         }
     }
 
+    async function readFirebaseValue(pathToRead) {
+        if (firebaseDb) {
+            const snapshot = await firebaseDb.ref(pathToRead).once("value")
+            return snapshot.val()
+        }
+
+        const config = getFirebaseConfig()
+
+        if (!config.databaseUrl) {
+            throw new Error("Firebase database URL is not configured")
+        }
+
+        const response = await axios.get(
+            `${config.databaseUrl}/${pathToRead}.json`,
+            {
+                timeout: 10000,
+                validateStatus: (status) => status >= 200 && status < 300,
+            }
+        )
+
+        return response.data
+    }
+
+    async function syncFirebaseData(options = {}) {
+        const config = getFirebaseConfig()
+        if (!firebaseDb && !config.databaseUrl) {
+            throw new Error("Firebase is disabled")
+        }
+
+        const requestedDeviceId = String(options.deviceId || "").trim()
+        const now = Date.now()
+
+        if (requestedDeviceId) {
+            const pathToRead = joinFirebasePath(config.deviceRootPath, requestedDeviceId)
+            const payload = await readFirebaseValue(pathToRead)
+
+            if (!payload) {
+                throw new Error(`No Firebase data found at ${pathToRead}`)
+            }
+
+            const samples = normalizeFirebaseDevicePayload(requestedDeviceId, payload, now)
+
+            if (samples.length === 0) {
+                throw new Error(`No supported sensor values found for ${requestedDeviceId}`)
+            }
+
+            const result = await ingestSamples(samples, config.source)
+
+            state.lastFirebaseError = null
+            state.lastFirebaseSamples = result.accepted
+            state.lastFirebaseSync = {
+                deviceCount: 1,
+                accepted: result.accepted.length,
+                rejected: result.rejected.length,
+                path: pathToRead,
+                source: config.source,
+                syncedAt: Date.now(),
+            }
+
+            return {
+                ...state.lastFirebaseSync,
+                samples: result.accepted,
+                rejectedSamples: result.rejected,
+                pushResult: result.pushResult,
+            }
+        }
+
+        const pathToRead = config.deviceRootPath
+        const devices = await readFirebaseValue(pathToRead)
+
+        if (!devices || typeof devices !== "object") {
+            throw new Error(`No Firebase data found at ${pathToRead}`)
+        }
+
+        const normalizedDevices = Object.entries(devices).map(([entryDeviceId, payload]) => ({
+            deviceId: entryDeviceId,
+            samples: normalizeFirebaseDevicePayload(entryDeviceId, payload, now),
+        }))
+
+        const samples = normalizedDevices.flatMap((device) => device.samples)
+
+        if (samples.length === 0) {
+            throw new Error(`No supported sensor values found under ${pathToRead}`)
+        }
+
+        const result = await ingestSamples(samples, config.source)
+
+        state.lastFirebaseError = null
+        state.lastFirebaseSamples = result.accepted
+        state.lastFirebaseSync = {
+            deviceCount: normalizedDevices.length,
+            accepted: result.accepted.length,
+            rejected: result.rejected.length,
+            path: pathToRead,
+            source: config.source,
+            syncedAt: Date.now(),
+        }
+
+        return {
+            ...state.lastFirebaseSync,
+            devices: normalizedDevices.map((device) => ({
+                deviceId: device.deviceId,
+                sampleCount: device.samples.length,
+            })),
+            samples: result.accepted,
+            rejectedSamples: result.rejected,
+            pushResult: result.pushResult,
+        }
+    }
+
     function scheduleMwbePolling() {
         const config = getMwbeConfig()
 
@@ -842,18 +1215,62 @@ function createApp() {
     })
 
     app.get("/data", async (req, res) => {
-        if (!db) {
+        const config = getFirebaseConfig()
+
+        if (!firebaseDb && !config.databaseUrl) {
             res.status(503).json({ error: "Firebase is disabled" })
             return
         }
 
-        const snapshot = await db.ref("sensor_data").once("value")
-        res.json(snapshot.val())
+        const explicitPath = String(req.query.path || "").trim()
+        const requestedDeviceId = String(req.query.deviceId || "").trim()
+        const pathToRead = explicitPath
+            || (requestedDeviceId ? joinFirebasePath(config.deviceRootPath, requestedDeviceId) : config.deviceRootPath)
+
+        const payload = await readFirebaseValue(pathToRead)
+        res.json(payload)
     })
 
     app.get("/iot/metrics", async (req, res) => {
         res.set("Content-Type", registry.contentType)
         res.send(await registry.metrics())
+    })
+
+    app.get("/firebase/status", async (req, res) => {
+        res.json({
+            config: getFirebaseConfig(),
+            lastFirebaseSync: state.lastFirebaseSync,
+            lastFirebaseError: state.lastFirebaseError,
+            recentSamples: state.lastFirebaseSamples,
+        })
+    })
+
+    app.get("/firebase/preview/:deviceId", async (req, res) => {
+        const config = getFirebaseConfig()
+
+        if (!firebaseDb && !config.databaseUrl) {
+            res.status(503).json({ error: "Firebase is disabled" })
+            return
+        }
+
+        try {
+            const deviceId = String(req.params.deviceId || "").trim()
+            const pathToRead = joinFirebasePath(config.deviceRootPath, deviceId)
+            const payload = await readFirebaseValue(pathToRead)
+
+            if (!payload) {
+                res.status(404).json({ error: `No Firebase data found at ${pathToRead}` })
+                return
+            }
+
+            res.json({
+                path: pathToRead,
+                raw: payload,
+                samples: normalizeFirebaseDevicePayload(deviceId, payload),
+            })
+        } catch (error) {
+            res.status(500).json({ error: "Failed to preview Firebase data", detail: error.message })
+        }
     })
 
     app.get("/iot/anomalies", async (req, res) => {
@@ -933,6 +1350,38 @@ function createApp() {
         } catch (error) {
             console.error(error.message)
             res.status(500).json({ error: "Failed to sync MWBE data", detail: error.message })
+        }
+    })
+
+    app.post("/firebase/sync", async (req, res) => {
+        try {
+            const deviceId = String(req.body?.deviceId || req.query.deviceId || "").trim()
+            const result = await syncFirebaseData({ deviceId })
+
+            res.json({
+                status: "success",
+                ...result,
+            })
+        } catch (error) {
+            state.lastFirebaseError = error.message
+            console.error(error.message)
+            res.status(500).json({ error: "Failed to sync Firebase data", detail: error.message })
+        }
+    })
+
+    app.post("/firebase/sync/:deviceId", async (req, res) => {
+        try {
+            const deviceId = String(req.params.deviceId || "").trim()
+            const result = await syncFirebaseData({ deviceId })
+
+            res.json({
+                status: "success",
+                ...result,
+            })
+        } catch (error) {
+            state.lastFirebaseError = error.message
+            console.error(error.message)
+            res.status(500).json({ error: "Failed to sync Firebase data", detail: error.message })
         }
     })
 
@@ -1063,9 +1512,11 @@ function createApp() {
         state,
         helpers: {
             getEsgConfig,
+            getFirebaseConfig,
             resolveThresholds,
             evaluateAnomaly,
             ingestSamples,
+            syncFirebaseData,
             syncMwbeData,
             scheduleMwbePolling,
             stopPolling,
@@ -1074,8 +1525,12 @@ function createApp() {
 }
 
 function startServer(options = {}) {
-    const { port = Number(process.env.PORT || 5000), enablePolling = true } = options
-    const runtime = createApp()
+    const {
+        port = Number(process.env.PORT || 5000),
+        enablePolling = true,
+        ...appOptions
+    } = options
+    const runtime = createApp(appOptions)
     const server = runtime.app.listen(port, () => {
         console.log(`Server running on port ${port}`)
         if (enablePolling) {
@@ -1100,7 +1555,14 @@ function startServer(options = {}) {
 }
 
 module.exports = {
+    DEFAULT_FIREBASE_DEVICE_ROOT_PATH,
     METRIC_TYPES,
+    normalizeFirebaseDevicePayload,
+    normalizeFirebaseTimestamp,
     createApp,
     startServer,
+}
+
+if (require.main === module) {
+    startServer()
 }
