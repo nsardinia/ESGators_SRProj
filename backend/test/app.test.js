@@ -211,6 +211,7 @@ test("firebase status exposes a usable default database URL", async () => {
         const body = await response.json()
         assert.equal(body.config.databaseUrl, DEFAULT_FIREBASE_DATABASE_URL)
         assert.equal(body.config.projectId, "senior-project-esgators")
+        assert.equal(body.config.backgroundPollingEnabled, false)
         assert.equal(body.config.syncIntervalMs, 5000)
         assert.equal(body.config.syncOnStart, true)
     } finally {
@@ -583,6 +584,40 @@ test("firebase sync falls back to known device ids when root devices path is den
             body.devices.map((device) => device.deviceId).sort(),
             [firstDeviceId, secondDeviceId]
         )
+    } finally {
+        await server.close()
+    }
+})
+
+test("firebase sync skips instead of failing when root devices path is denied and no known devices exist", async () => {
+    const firebaseDb = createMockFirebaseDbWithFailures(
+        {},
+        {
+            devices: Object.assign(new Error("Request failed with status code 401"), {
+                response: {
+                    status: 401,
+                    data: { error: "Permission denied" },
+                },
+            }),
+        }
+    )
+    const server = await createTestServer({ firebaseDb, supabase: null })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/firebase/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        })
+
+        assert.equal(response.status, 200)
+        const body = await response.json()
+
+        assert.equal(body.accepted, 0)
+        assert.equal(body.rejected, 0)
+        assert.equal(body.deviceCount, 0)
+        assert.equal(body.pushResult.reason, "root_path_permission_denied")
+        assert.deepEqual(body.devices, [])
     } finally {
         await server.close()
     }

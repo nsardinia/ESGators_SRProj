@@ -460,6 +460,10 @@ function createApp(options = {}) {
                 process.env.FIREBASE_DEVICE_ROOT_PATH || DEFAULT_FIREBASE_DEVICE_ROOT_PATH
             ).replace(/^\/+|\/+$/g, ""),
             source: String(process.env.FIREBASE_SOURCE_NAME || "firebase-rtdb"),
+            backgroundPollingEnabled: parseBoolean(
+                process.env.FIREBASE_BACKGROUND_POLLING_ENABLED,
+                false
+            ),
             syncIntervalMs: Number(
                 process.env.FIREBASE_SYNC_INTERVAL_MS || DEFAULT_FIREBASE_SYNC_INTERVAL_MS
             ),
@@ -1333,6 +1337,13 @@ function createApp(options = {}) {
             })
         }
 
+        const knownDeviceIds = await loadKnownFirebaseDeviceIds()
+        if (knownDeviceIds.length > 0) {
+            return syncFirebaseDevicesByIds(knownDeviceIds, config, {
+                path: joinFirebasePath(config.deviceRootPath, "{known_devices}"),
+            })
+        }
+
         const pathToRead = config.deviceRootPath
         let devices
 
@@ -1343,14 +1354,30 @@ function createApp(options = {}) {
                 throw error
             }
 
-            const knownDeviceIds = await loadKnownFirebaseDeviceIds()
-            if (knownDeviceIds.length === 0) {
-                throw error
+            state.lastFirebaseError = "Firebase devices root is denied and no known device list is configured"
+            state.lastFirebaseSamples = []
+            state.lastFirebaseSync = {
+                deviceCount: 0,
+                accepted: 0,
+                rejected: 0,
+                path: pathToRead,
+                source: config.source,
+                syncedAt: Date.now(),
+                pushResult: {
+                    pushed: 0,
+                    skipped: true,
+                    reason: "root_path_permission_denied",
+                },
+                skippedUnchanged: 0,
             }
 
-            return syncFirebaseDevicesByIds(knownDeviceIds, config, {
-                path: joinFirebasePath(config.deviceRootPath, "{known_devices}"),
-            })
+            return {
+                ...state.lastFirebaseSync,
+                devices: [],
+                samples: [],
+                rejectedSamples: [],
+                pushResult: state.lastFirebaseSync.pushResult,
+            }
         }
 
         if (!devices || typeof devices !== "object") {
@@ -1834,7 +1861,9 @@ function startServer(options = {}) {
     const server = runtime.app.listen(port, () => {
         console.log(`Server running on port ${port}`)
         if (enablePolling) {
-            runtime.helpers.scheduleFirebasePolling()
+            if (runtime.helpers.getFirebaseConfig().backgroundPollingEnabled) {
+                runtime.helpers.scheduleFirebasePolling()
+            }
             runtime.helpers.scheduleMwbePolling()
         }
     })

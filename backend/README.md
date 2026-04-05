@@ -50,6 +50,7 @@ Optional Firebase RTDB sync config:
 - `FIREBASE_DEVICE_ROOT_PATH`
 - `FIREBASE_SOURCE_NAME`
 - `FIREBASE_SYNC_DEVICE_IDS`
+- `FIREBASE_BACKGROUND_POLLING_ENABLED`
 - `FIREBASE_SYNC_INTERVAL_MS`
 - `FIREBASE_SYNC_ON_START`
 
@@ -60,7 +61,9 @@ If no Firebase env vars are set, the backend falls back to:
 - 5 second polling interval
 
 Firebase sync notes:
+- backend background polling is disabled by default; the temporary flow is user-session polling from the frontend against registered device IDs
 - if `devices.json` is denied, the backend falls back to per-device reads via `FIREBASE_SYNC_DEVICE_IDS` or the Supabase `devices` table
+- if neither of those is available, background polling is skipped instead of repeatedly failing with 401
 - unchanged Firebase values are skipped so Prometheus is only updated when a metric changes
 
 Optional threshold override:
