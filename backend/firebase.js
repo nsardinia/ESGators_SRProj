@@ -1,6 +1,7 @@
 require("dotenv").config()
 
 const admin = require("firebase-admin")
+const DEFAULT_FIREBASE_PROJECT_ID = "senior-project-esgators"
 
 function loadServiceAccount() {
   if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
@@ -19,11 +20,11 @@ function resolveDatabaseUrl(serviceAccount) {
     return process.env.VITE_FIREBASE_DATABASE_URL
   }
 
-  const projectId = process.env.FIREBASE_PROJECT_ID || serviceAccount?.project_id
-
-  if (!projectId) {
-    throw new Error("Firebase database URL is not configured")
-  }
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID
+    || process.env.VITE_FIREBASE_PROJECT_ID
+    || serviceAccount?.project_id
+    || DEFAULT_FIREBASE_PROJECT_ID
 
   return `https://${projectId}-default-rtdb.firebaseio.com`
 }

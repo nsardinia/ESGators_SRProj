@@ -1,7 +1,11 @@
 const test = require("node:test")
 const assert = require("node:assert/strict")
 
-const { normalizeFirebaseDevicePayload, startServer } = require("../app")
+const {
+    DEFAULT_FIREBASE_DATABASE_URL,
+    normalizeFirebaseDevicePayload,
+    startServer,
+} = require("../app")
 
 delete process.env.GRAFANA_USERNAME
 delete process.env.GRAFANA_API_KEY
@@ -21,6 +25,28 @@ function createMockFirebaseDb(valuesByPath) {
             return {
                 async once(eventName) {
                     assert.equal(eventName, "value")
+                    return {
+                        val() {
+                            return valuesByPath[path] ?? null
+                        },
+                    }
+                },
+            }
+        },
+    }
+}
+
+function createMockFirebaseDbWithFailures(valuesByPath, errorsByPath = {}) {
+    return {
+        ref(path) {
+            return {
+                async once(eventName) {
+                    assert.equal(eventName, "value")
+
+                    if (errorsByPath[path]) {
+                        throw errorsByPath[path]
+                    }
+
                     return {
                         val() {
                             return valuesByPath[path] ?? null
@@ -170,6 +196,24 @@ test("metrics endpoint exposes Prometheus-formatted sensor and ESG values", asyn
         assert.match(metricsText, /sensor_data_anomaly_flag\{sensor_id="sensor-prom",metric_type="temperature",source="test-suite",owner_uid="unknown",owner_email="unknown",device_name="sensor-prom",severity="warning"\} 1/)
         assert.match(metricsText, /esg_environment_score\{scope="overall"\} 71\.43/)
         assert.match(metricsText, /esg_buffer_size 1/)
+    } finally {
+        await server.close()
+    }
+})
+
+test("firebase status exposes a usable default database URL", async () => {
+    const server = await createTestServer({ firebaseDb: null })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/firebase/status`)
+        assert.equal(response.status, 200)
+
+        const body = await response.json()
+        assert.equal(body.config.databaseUrl, DEFAULT_FIREBASE_DATABASE_URL)
+        assert.equal(body.config.projectId, "senior-project-esgators")
+        assert.equal(body.config.backgroundPollingEnabled, false)
+        assert.equal(body.config.syncIntervalMs, 5000)
+        assert.equal(body.config.syncOnStart, true)
     } finally {
         await server.close()
     }
@@ -429,6 +473,151 @@ test("firebase sync endpoint only ingests devices owned by the requested ownerUi
             new RegExp(`sensor_data_metric\\{sensor_id="${ownedDeviceId}",metric_type="temperature",source="firebase-rtdb",owner_uid="${ownerUid}",owner_email="owner-a@example.com",device_name="Owner A Node"\\} 23\\.5`)
         )
         assert.doesNotMatch(metricsText, new RegExp(otherDeviceId))
+    } finally {
+        await server.close()
+    }
+})
+
+test("firebase sync skips unchanged samples on subsequent polls", async () => {
+    const deviceId = "dev_repeat_same_value"
+    const firebaseDb = createMockFirebaseDb({
+        [`devices/${deviceId}`]: {
+            sht30: {
+                latest: {
+                    deviceId,
+                    temperatureC: 24.25,
+                    humidityPct: 51.75,
+                    updatedAtMs: 1234,
+                },
+            },
+        },
+    })
+    const server = await createTestServer({ firebaseDb })
+
+    try {
+        const firstResponse = await fetch(`${server.baseUrl}/firebase/sync/${deviceId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+        })
+        assert.equal(firstResponse.status, 200)
+
+        const secondResponse = await fetch(`${server.baseUrl}/firebase/sync/${deviceId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+        })
+        assert.equal(secondResponse.status, 200)
+
+        const secondBody = await secondResponse.json()
+        assert.equal(secondBody.accepted, 0)
+        assert.equal(secondBody.rejected, 0)
+        assert.equal(secondBody.skippedUnchanged, 2)
+        assert.equal(secondBody.pushResult.reason, "no_changed_samples")
+    } finally {
+        await server.close()
+    }
+})
+
+test("firebase sync falls back to known device ids when root devices path is denied", async () => {
+    const firstDeviceId = "dev_known_a"
+    const secondDeviceId = "dev_known_b"
+    const firebaseDb = createMockFirebaseDbWithFailures(
+        {
+            [`devices/${firstDeviceId}`]: {
+                sht30: {
+                    latest: {
+                        deviceId: firstDeviceId,
+                        temperatureC: 22.1,
+                        humidityPct: 41.5,
+                        updatedAtMs: 1234,
+                    },
+                },
+            },
+            [`devices/${secondDeviceId}`]: {
+                no2: {
+                    latest: {
+                        deviceId: secondDeviceId,
+                        raw: 120,
+                        updatedAtMs: 1234,
+                    },
+                },
+                sound: {
+                    latest: {
+                        deviceId: secondDeviceId,
+                        raw: 61,
+                        updatedAtMs: 1234,
+                    },
+                },
+            },
+        },
+        {
+            devices: Object.assign(new Error("Request failed with status code 401"), {
+                response: {
+                    status: 401,
+                    data: { error: "Permission denied" },
+                },
+            }),
+        }
+    )
+    const supabase = new MockSupabaseClient({
+        devices: [
+            { device_id: firstDeviceId, owner_uid: "owner-a", name: "Known A" },
+            { device_id: secondDeviceId, owner_uid: "owner-b", name: "Known B" },
+        ],
+        users: [],
+    })
+    const server = await createTestServer({ firebaseDb, supabase })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/firebase/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        })
+
+        assert.equal(response.status, 200)
+        const body = await response.json()
+
+        assert.equal(body.deviceCount, 2)
+        assert.equal(body.accepted, 4)
+        assert.equal(body.path, "devices/{known_devices}")
+        assert.deepEqual(
+            body.devices.map((device) => device.deviceId).sort(),
+            [firstDeviceId, secondDeviceId]
+        )
+    } finally {
+        await server.close()
+    }
+})
+
+test("firebase sync skips instead of failing when root devices path is denied and no known devices exist", async () => {
+    const firebaseDb = createMockFirebaseDbWithFailures(
+        {},
+        {
+            devices: Object.assign(new Error("Request failed with status code 401"), {
+                response: {
+                    status: 401,
+                    data: { error: "Permission denied" },
+                },
+            }),
+        }
+    )
+    const server = await createTestServer({ firebaseDb, supabase: null })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/firebase/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        })
+
+        assert.equal(response.status, 200)
+        const body = await response.json()
+
+        assert.equal(body.accepted, 0)
+        assert.equal(body.rejected, 0)
+        assert.equal(body.deviceCount, 0)
+        assert.equal(body.pushResult.reason, "root_path_permission_denied")
+        assert.deepEqual(body.devices, [])
     } finally {
         await server.close()
     }
