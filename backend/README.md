@@ -482,6 +482,6 @@ Threshold definitions are also stored in English JSON here:
 - MWBE polling stays disabled until `MWBE_API_URL` is configured.
 - If Grafana credentials are missing, ingestion still works but remote write is skipped.
 - GitHub Actions runs `backend` tests on backend-related pushes and pull requests.
-- Fly.io deployment runs automatically only when `main` receives a push that changes `backend/**`.
+- Fly.io deployment runs automatically when `main` or `dev` receives a push that changes `backend/**`.
 - Set the GitHub repository secret `FLY_API_TOKEN` before expecting automatic deployment.
 - A local `git commit` alone does not deploy anything. The deployment trigger is the GitHub `push` event.
