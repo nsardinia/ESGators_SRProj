@@ -63,7 +63,7 @@ function useOwnedNodes(user) {
   const [owner, setOwner] = useState(null)
 
   const syncOwner = useCallback(async () => {
-    const ownerResponse = await fetch(`${API_BASE_URL}/users`, {
+    const ownerResponse = await fetch(`${MWBE_API_BASE_URL}/users`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -78,7 +78,10 @@ function useOwnedNodes(user) {
     const ownerPayload = await ownerResponse.json().catch(() => ({}))
 
     if (!ownerResponse.ok || !ownerPayload.user?.firebase_uid) {
-      throw new Error(ownerPayload.message || "Failed to sync node owner")
+      throw new Error(
+        ownerPayload.message ||
+        `Failed to sync node owner from ${MWBE_API_BASE_URL}/users`
+      )
     }
 
     setOwner(ownerPayload.user)
@@ -95,7 +98,10 @@ function useOwnedNodes(user) {
       const payload = await response.json().catch(() => ({}))
 
       if (!response.ok) {
-        throw new Error(payload.message || "Failed to load nodes")
+        throw new Error(
+          payload.message ||
+          `Failed to load nodes from ${MWBE_API_BASE_URL}/devices/owned`
+        )
       }
 
       setCreatedNodes((currentNodes) => {

@@ -12,7 +12,7 @@ import Input from "../components/ui/input"
 import Textarea from "../components/ui/textarea"
 import { useAuth } from "../components/AuthContext"
 import useOwnedNodes from "../hooks/useOwnedNodes"
-import { API_BASE_URL, getAuthHeaders } from "../lib/api"
+import { MWBE_API_BASE_URL, getAuthHeaders } from "../lib/api"
 import "./NodeMapPage.css"
 
 function formatLastUpdate(updatedAtMs) {
@@ -80,7 +80,7 @@ function NodeMapPage() {
     try {
       await syncOwner()
 
-      const response = await fetch(`${API_BASE_URL}/devices/claim`, {
+      const response = await fetch(`${MWBE_API_BASE_URL}/devices/claim`, {
         method: "POST",
         headers: await getAuthHeaders(user, {
           "Content-Type": "application/json",
@@ -169,13 +169,22 @@ function NodeMapPage() {
         <div className="node-canvas-scroll">
           {loadingNodes && <div className="node-empty-state">Loading nodes...</div>}
 
-          {!loadingNodes && createdNodes.length === 0 && (
+          {!loadingNodes && error && (
+            <div className="node-empty-state">
+              {error}
+              <div className="mt-3 text-[0.8rem] text-[#c7d1e1]">
+                MWBE API: {MWBE_API_BASE_URL}
+              </div>
+            </div>
+          )}
+
+          {!loadingNodes && !error && createdNodes.length === 0 && (
             <div className="node-empty-state">
               No nodes yet. Create one to generate its node ID and API secret.
             </div>
           )}
 
-          {!loadingNodes && createdNodes.length > 0 && filteredNodes.length === 0 && (
+          {!loadingNodes && !error && createdNodes.length > 0 && filteredNodes.length === 0 && (
             <div className="node-empty-state">
               No nodes match "{searchQuery.trim()}".
             </div>

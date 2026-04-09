@@ -4,6 +4,8 @@
  * Last Edit: Nicholas Sardinia, 3/1/2026
  */
 import { useState } from "react"
+import { useAuth } from "../components/AuthContext"
+import { BACKEND_API_BASE_URL } from "../lib/api"
 
 const exportRanges = [
   { key: "day", label: "Export Day CSV" },
@@ -23,15 +25,30 @@ function getGrafanaDashboardUrl() {
   return import.meta.env.VITE_GRAFANA_DASHBOARD_URL?.trim()
 }
 
-function getBackendBaseUrl() {
-  return (import.meta.env.VITE_BACKEND_URL || "http://localhost:5000").replace(/\/$/, "")
+function buildGrafanaDashboardUrl(baseUrl, user) {
+  if (!baseUrl) {
+    return ""
+  }
+
+  const dashboardUrl = new URL(baseUrl)
+
+  if (user?.uid) {
+    dashboardUrl.searchParams.set("var-owner_uid", user.uid)
+  }
+
+  if (user?.email) {
+    dashboardUrl.searchParams.set("var-owner_email", user.email)
+  }
+
+  return dashboardUrl.toString()
 }
 
 const DashboardPage = () => {
+  const { user } = useAuth()
   const [activeRange, setActiveRange] = useState("")
   const [statusMessage, setStatusMessage] = useState("")
   const [errorMessage, setErrorMessage] = useState("")
-  const grafanaDashboardUrl = getGrafanaDashboardUrl()
+  const grafanaDashboardUrl = buildGrafanaDashboardUrl(getGrafanaDashboardUrl(), user)
 
   function handleOpenGrafana() {
     if (!grafanaDashboardUrl) {
@@ -47,7 +64,7 @@ const DashboardPage = () => {
     setStatusMessage(`${range} export preparing...`)
 
     try {
-      const response = await fetch(`${getBackendBaseUrl()}/iot/export/${range}`)
+      const response = await fetch(`${BACKEND_API_BASE_URL}/iot/export/${range}`)
 
       if (!response.ok) {
         const text = await response.text()
@@ -116,7 +133,8 @@ const DashboardPage = () => {
           <p className={cardLabelClassName}>Grafana</p>
           <h2 className="mb-2 text-[1.05rem] font-semibold text-[var(--text)]">Monitoring dashboard</h2>
           <p className="mb-[14px] leading-7 text-[var(--muted)]">
-            Open the live Grafana dashboard in a new tab when you need the full metrics view.
+            Open the live Grafana dashboard in a new tab. Your current account UID/email is appended as dashboard
+            variables so panels can filter by owner.
           </p>
           {grafanaDashboardUrl ? (
             <button
