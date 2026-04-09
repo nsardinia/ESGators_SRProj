@@ -12,15 +12,15 @@ import Input from "../components/ui/input"
 import Textarea from "../components/ui/textarea"
 import { useAuth } from "../components/AuthContext"
 import useOwnedNodes from "../hooks/useOwnedNodes"
-import { API_BASE_URL } from "../lib/api"
+import { API_BASE_URL, getAuthHeaders } from "../lib/api"
 import "./NodeMapPage.css"
 
-function formatRawDeviceData(telemetry) {
-  if (!telemetry) {
+function formatLastUpdate(updatedAtMs) {
+  if (typeof updatedAtMs !== "number") {
     return "Waiting for telemetry"
   }
 
-  return JSON.stringify(telemetry)
+  return new Date(updatedAtMs).toLocaleString()
 }
 
 function NodeMapPage() {
@@ -31,6 +31,7 @@ function NodeMapPage() {
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [deletingNodeId, setDeletingNodeId] = useState("")
   const { createdNodes, error, loadingNodes, setError, syncOwner, reloadNodes } = useOwnedNodes(user)
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
@@ -77,15 +78,14 @@ function NodeMapPage() {
     setError("")
 
     try {
-      const owner = await syncOwner()
+      await syncOwner()
 
       const response = await fetch(`${API_BASE_URL}/devices/claim`, {
         method: "POST",
-        headers: {
+        headers: await getAuthHeaders(user, {
           "Content-Type": "application/json",
-        },
+        }),
         body: JSON.stringify({
-          ownerUid: owner.firebase_uid,
           name: name.trim(),
           description: description.trim(),
         }),
@@ -108,6 +108,41 @@ function NodeMapPage() {
       setError(requestError.message || "Failed to create node")
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleDeleteNode = async (node) => {
+    if (!user?.uid) {
+      setError("You must be signed in to delete a node.")
+      return
+    }
+
+    const shouldDelete = window.confirm(`Delete ${node.name}? This will permanently remove it from your nodes.`)
+
+    if (!shouldDelete) {
+      return
+    }
+
+    setDeletingNodeId(node.id)
+    setError("")
+
+    try {
+      await syncOwner()
+      const response = await fetch(`${API_BASE_URL}/devices/${encodeURIComponent(node.id)}`, {
+        method: "DELETE",
+        headers: await getAuthHeaders(user),
+      })
+
+      if (response.status !== 204) {
+        const payload = await response.json().catch(() => ({}))
+        throw new Error(payload.message || "Failed to delete node")
+      }
+
+      await reloadNodes()
+    } catch (requestError) {
+      setError(requestError.message || "Failed to delete node")
+    } finally {
+      setDeletingNodeId("")
     }
   }
 
@@ -148,7 +183,18 @@ function NodeMapPage() {
 
           {filteredNodes.map((node) => (
             <article key={node.id} className="node-card-created">
-              <p className="mb-2 text-base font-bold text-[#effbf4]">{node.name}</p>
+              <div className="node-card-header">
+                <p className="mb-2 text-base font-bold text-[#effbf4]">{node.name}</p>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  disabled={submitting || deletingNodeId === node.id}
+                  onClick={() => handleDeleteNode(node)}
+                >
+                  {deletingNodeId === node.id ? "Deleting..." : "Delete"}
+                </Button>
+              </div>
               <p className="mb-[14px] leading-[1.5] text-[#b8dec9]">{node.description}</p>
               <dl className="node-credentials">
                 <div>
@@ -161,7 +207,7 @@ function NodeMapPage() {
                 </div>
                 <div>
                   <dt className="mb-1 text-[0.72rem] uppercase tracking-[0.08em] text-[#b4c2d8]">Last Update</dt>
-                  <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{formatRawDeviceData(node.telemetry)}</dd>
+                      <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{formatLastUpdate(node.updatedAtMs)}</dd>
                 </div>
                 {node.telemetry && (
                   <>

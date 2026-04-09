@@ -31,6 +31,8 @@ String firebaseCustomToken;
 String firebaseUid;
 String firebaseIdToken;
 String firebaseRefreshToken;
+String ownerFirebaseUid;
+String firebaseDevicePath;
 
 bool isHttpsUrl(const String &url) {
   return url.startsWith("https://");
@@ -245,8 +247,14 @@ bool provisionDevice() {
         firebaseCustomToken = String((const char *)(responseDoc["firebaseCustomToken"] | ""));
         firebaseUid = String((const char *)(responseDoc["firebaseUid"] | ""));
         provisionedDeviceId = String((const char *)(responseDoc["deviceId"] | ""));
+        ownerFirebaseUid = String((const char *)(responseDoc["ownerFirebaseUid"] | ""));
+        firebaseDevicePath = String((const char *)(responseDoc["firebaseDevicePath"] | ""));
 
-        if (firebaseCustomToken.isEmpty() || provisionedDeviceId.isEmpty()) {
+        if (
+          firebaseCustomToken.isEmpty() ||
+          provisionedDeviceId.isEmpty() ||
+          firebaseDevicePath.isEmpty()
+        ) {
           Serial.println("Provision response is missing required fields.");
           return false;
         }
@@ -399,6 +407,7 @@ String buildTelemetryPayload() {
 
   payloadDoc["deviceId"] = provisionedDeviceId;
   payloadDoc["firebaseUid"] = firebaseUid;
+  payloadDoc["ownerFirebaseUid"] = ownerFirebaseUid;
   payloadDoc["temperatureC"] = temperatureC;
   payloadDoc["humidityPct"] = humidityPct;
   payloadDoc["batteryVolts"] = batteryVolts;
@@ -418,8 +427,7 @@ bool writeTelemetry() {
 
   const String path =
     String(FIREBASE_DATABASE_URL) +
-    "/devices/" +
-    provisionedDeviceId +
+    firebaseDevicePath +
     "/latest.json?auth=" +
     firebaseIdToken;
 

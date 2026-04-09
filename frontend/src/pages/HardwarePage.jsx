@@ -122,15 +122,13 @@ function HardwareDetailModal({ option, onClose }) {
           <div className="max-h-[calc(90vh-120px)] overflow-y-auto px-6 pb-6">
             <div className="mb-6 grid gap-4 md:grid-cols-[1.2fr_1fr]">
               <div className="flex min-h-[220px] items-center justify-center rounded-[18px] border border-dashed border-[rgba(148,163,184,0.32)] bg-[linear-gradient(135deg,rgba(30,41,59,0.92),rgba(17,24,39,0.96))] px-6 text-center text-sm text-[var(--muted)]">
-                Image placeholder for {option.title}
+                TODO
               </div>
               <div className="rounded-[18px] border border-[rgba(96,165,250,0.18)] bg-[rgba(15,23,42,0.82)] p-5">
                 <p className="text-[0.78rem] font-semibold uppercase tracking-[0.14em] text-[#93c5fd]">
                   Node Overview
                 </p>
-                <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-                  Use this panel for node imagery, assembly snapshots, or wiring diagrams once those assets are ready.
-                </p>
+                <p className="mt-3 text-sm leading-6 text-[var(--muted)]">TODO</p>
               </div>
             </div>
 
@@ -213,7 +211,7 @@ function HardwarePage() {
             <Card className="group h-full overflow-hidden border-[rgba(96,165,250,0.14)] transition duration-200 hover:-translate-y-1 hover:border-[rgba(96,165,250,0.34)] hover:shadow-[0_22px_50px_rgba(8,15,30,0.42)]">
               <CardContent className="p-0">
                 <div className="flex min-h-[220px] items-center justify-center border-b border-[rgba(148,163,184,0.14)] bg-[linear-gradient(135deg,rgba(15,23,42,0.95),rgba(30,41,59,0.88))] px-6 text-center text-sm text-[var(--muted)]">
-                  Image placeholder
+                  TODO
                 </div>
                 <div className="space-y-4 p-5">
                   <div>

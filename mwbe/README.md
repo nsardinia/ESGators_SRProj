@@ -89,10 +89,39 @@ create table if not exists public.users (
   id uuid primary key default gen_random_uuid(),
   email text unique not null,
   name text not null,
+  firebase_uid text unique,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create table if not exists public.device_history (
+  sample_key text primary key,
+  device_id text not null,
+  owner_uid text not null,
+  owner_firebase_uid text,
+  captured_at timestamptz not null,
+  source_updated_at timestamptz not null,
+  sample_interval_start timestamptz not null,
+  no2 double precision,
+  sound_level double precision,
+  particulate_matter_level double precision,
+  temperature double precision,
+  humidity double precision,
+  raw_payload jsonb not null default '{}'::jsonb
+);
+
+create index if not exists device_history_device_interval_idx
+  on public.device_history (device_id, sample_interval_start desc);
 ```
+
+`mwbe` now includes a background sync that polls Firebase Realtime Database every 10 seconds and mirrors the latest supported telemetry into `device_history`.
+
+Relevant env vars:
+- `DEVICE_HISTORY_SYNC_ENABLED=true` (set to `false` to disable background sync)
+- `DEVICE_HISTORY_POLL_INTERVAL_MS=10000`
+- `DEVICE_HISTORY_MAX_SNAPSHOT_AGE_MS=30000`
+
+If a Firebase snapshot is older than `DEVICE_HISTORY_MAX_SNAPSHOT_AGE_MS`, MWBE skips it instead of writing stale history rows. This helps avoid wasting compute on devices that have gone offline but still have an old last-known payload in RTDB.
 
 ## 4-1. Configure Grafana Cloud (required for metrics push)
 
@@ -143,11 +172,58 @@ Without these values, the API still runs, but Grafana push is skipped.
 - `PUT /users/:id` update user
 - `DELETE /users/:id` delete user
 
+### `src/routes/devices.js`
+- `GET /devices/owned` list the authenticated caller's devices
+- `GET /devices/:deviceId/history?limit=360` fetch historical telemetry for one authenticated caller device
+- `POST /devices/provision` mint a Firebase custom token for a device
+
+Protected owner-scoped routes now require a Firebase user ID token in the `Authorization: Bearer <token>` header. The backend derives the owner from the verified token instead of trusting `ownerUid` from the client.
+
 ## 6. Scripts
 
 - `npm run dev`: run with autoreload.
 - `npm start`: run normally (production-style startup).
+- `npm run dummy-device`: provision a test device and publish Firebase telemetry every second.
 - `npm test`: placeholder for Node test runner.
+
+### Dummy device driver
+
+To test the real device flow from your laptop, use [`mwbe/scripts/dummy-device-driver.js`](/home/nicholas/srproj/ESGators_SRProj/mwbe/scripts/dummy-device-driver.js).
+
+Required values:
+- `DUMMY_DEVICE_ID`
+- `DUMMY_DEVICE_SECRET`
+- `DUMMY_DEVICE_FIREBASE_API_KEY`
+- `DUMMY_DEVICE_FIREBASE_DATABASE_URL`
+- `DUMMY_DEVICE_BACKEND_BASE_URL` (defaults to `http://localhost:3000`)
+
+The script automatically loads [`mwbe/.env.dummy-device.example`](/home/nicholas/srproj/ESGators_SRProj/mwbe/.env.dummy-device.example) as a template pattern and expects your real local values in `mwbe/.env.dummy-device`.
+
+Optional values:
+- `DUMMY_DEVICE_INTERVAL_MS=1000`
+- `DUMMY_DEVICE_PROFILE=full` for devices with PM
+- `DUMMY_DEVICE_PROFILE=basic` for devices without PM
+- `DUMMY_DEVICE_LOG_RESPONSES=true`
+
+Example:
+
+```bash
+cp .env.dummy-device.example .env.dummy-device
+# edit .env.dummy-device with your device credentials
+npm run dummy-device
+```
+
+If you want to use a different file, run:
+
+```bash
+npm run dummy-device -- --env-file .env.some-other-device
+```
+
+The script:
+- calls `POST /devices/provision`
+- exchanges the returned Firebase custom token for a Firebase ID token
+- refreshes that token automatically when needed
+- writes simulated telemetry every second to the provisioned RTDB device path
 
 ## Swagger Docs
 

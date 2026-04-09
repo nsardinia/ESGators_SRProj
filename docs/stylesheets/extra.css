@@ -1,0 +1,84 @@
+/*
+  Read the Docs-inspired polish for the local MkDocs site.
+  This keeps the built-in theme but nudges colors and spacing
+  toward the reference screenshot the user provided.
+*/
+
+:root {
+  --esgators-sidebar-blue: #4f86b9;
+  --esgators-sidebar-blue-dark: #4479a9;
+  --esgators-sidebar-charcoal: #2f2c2c;
+  --esgators-sidebar-border: #d1d4d8;
+  --esgators-link: #3b7bbf;
+}
+
+.wy-side-nav-search {
+  background: linear-gradient(180deg, var(--esgators-sidebar-blue) 0%, var(--esgators-sidebar-blue-dark) 100%);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.12);
+}
+
+.wy-side-nav-search > a,
+.wy-side-nav-search .wy-dropdown > a {
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.wy-side-nav-search input[type="text"] {
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+  padding: 0.55rem 1rem;
+}
+
+.wy-nav-side {
+  background: var(--esgators-sidebar-charcoal);
+}
+
+.wy-menu-vertical header,
+.wy-menu-vertical p.caption {
+  color: #ffffff;
+}
+
+.wy-menu-vertical a {
+  color: #f2f5f8;
+}
+
+.wy-menu-vertical li.current {
+  background: #ffffff;
+}
+
+.wy-menu-vertical li.current > a {
+  color: #2f3b46;
+  border-top: 1px solid var(--esgators-sidebar-border);
+  border-bottom: 1px solid var(--esgators-sidebar-border);
+}
+
+.wy-menu-vertical li.current a:hover,
+.wy-menu-vertical li.current > a:hover {
+  background: #f7f7f7;
+}
+
+.wy-menu-vertical li.toctree-l2.current > a,
+.wy-menu-vertical li.toctree-l3.current > a {
+  background: #ededed;
+}
+
+.wy-nav-content {
+  max-width: 1180px;
+}
+
+.wy-nav-content-wrap {
+  background: #fcfcfc;
+}
+
+.wy-breadcrumbs a,
+.wy-nav-content a {
+  color: var(--esgators-link);
+}
+
+.rst-content h1,
+.rst-content h2,
+.rst-content h3 {
+  font-weight: 700;
+}

@@ -1,0 +1,17 @@
+{
+  "rules": {
+    "users": {
+      "$userUid": {
+        ".read": "auth != null && (auth.uid === $userUid || auth.token.owner_uid === $userUid)",
+        "config": {
+          ".write": "auth != null && (auth.uid === $userUid || auth.token.owner_uid === $userUid)"
+        },
+        "devices": {
+          "$deviceId": {
+            ".write": "auth != null && (auth.uid === $userUid || auth.token.owner_uid === $userUid)"
+          }
+        }
+      }
+    }
+  }
+}

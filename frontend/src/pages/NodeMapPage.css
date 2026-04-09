@@ -40,6 +40,13 @@
   padding: clamp(8px, 1.2vh, 12px);
 }
 
+.node-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .node-credentials {
   margin: 0;
   display: grid;

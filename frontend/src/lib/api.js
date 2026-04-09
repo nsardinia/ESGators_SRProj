@@ -26,4 +26,17 @@ function getApiBaseUrl() {
 
 const API_BASE_URL = getApiBaseUrl()
 
-export { API_BASE_URL }
+async function getAuthHeaders(user, headers = {}) {
+  if (!user) {
+    return headers
+  }
+
+  const token = await user.getIdToken()
+
+  return {
+    ...headers,
+    Authorization: `Bearer ${token}`,
+  }
+}
+
+export { API_BASE_URL, getAuthHeaders }

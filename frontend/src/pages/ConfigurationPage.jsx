@@ -4,7 +4,7 @@ import useOwnedNodes from "../hooks/useOwnedNodes"
 
 function ConfigurationPage() {
   const { user } = useAuth()
-  const { createdNodes, error, loadingNodes } = useOwnedNodes(user)
+  const { createdNodes, error, loadingNodes, owner } = useOwnedNodes(user)
 
   return (
     <section className="flex min-h-0 max-w-[940px] flex-1 flex-col">
@@ -17,7 +17,7 @@ function ConfigurationPage() {
         </div>
       )}
 
-      <NodeNetwork nodes={createdNodes} />
+      <NodeNetwork nodes={createdNodes} ownerFirebaseUid={owner?.firebase_uid || ""} />
     </section>
   )
 }

@@ -10,8 +10,10 @@ This sketch performs the full device bootstrap flow:
   - `firebaseCustomToken`
   - `firebaseUid`
   - `deviceId`
+  - `ownerFirebaseUid`
+  - `firebaseDevicePath`
 - Exchange the custom token for a Firebase ID token
-- Write telemetry to Firebase Realtime Database under `/devices/{deviceId}/latest`
+- Write telemetry to Firebase Realtime Database under `/users/{ownerFirebaseUid}/devices/{deviceId}/latest`
 
 Backend reference:
 
