@@ -118,7 +118,14 @@ npm run dev
 
 ### Sensor export
 
-`POST /iot/data` stores sensor samples in Supabase table `sensor_readings`.
+`GET /iot/export/:range` now checks data in this order:
+- `sensor_readings` rows from Supabase, if that table is available
+- recent in-memory samples kept by the backend process
+- generated fallback sample data for frontend download testing
+
+The current `app.js` runtime keeps recent accepted samples in memory for ESG scoring and export, so that temporary data survives across requests but is lost on restart.
+
+If you want long-term export history from Supabase, keep using or create this table:
 
 Assumed table shape:
 
@@ -141,8 +148,7 @@ curl -L "http://localhost:5000/iot/export/week?sensor_id=sensor-a" -o sensor-rea
 curl -L "http://localhost:5000/iot/export/month?metric_type=temperature" -o sensor-readings-month.csv
 ```
 
-If Supabase has no matching rows yet, the export API returns fallback `th` sample data
-(`th-01`, `th-02` with `temperature` and `humidity`) so frontend download testing can proceed.
+If Supabase has no matching rows and the current process has no buffered samples yet, the export API returns generated fallback CSV data so frontend download testing can still proceed.
 
 ### Quick dummy test
 
@@ -182,6 +188,7 @@ Samples in red are marked as `critical`.
 ## Endpoints
 
 - `GET /iot/metrics`: Prometheus scrape endpoint
+- `GET /iot/export/:range`: CSV export for `day`, `week`, or `month`
 - `GET /firebase/status`: Firebase sync config and last sync state
 - `GET /firebase/preview/:deviceId`: raw Firebase payload plus normalized Prometheus samples
 - `POST /firebase/sync`: sync all Firebase devices or one device via `deviceId`

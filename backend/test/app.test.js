@@ -62,6 +62,8 @@ class MockSupabaseQuery {
     constructor(rows) {
         this.rows = rows
         this.filters = []
+        this.gteFilter = null
+        this.sort = null
         this.singleRowMode = false
     }
 
@@ -79,6 +81,16 @@ class MockSupabaseQuery {
         return this
     }
 
+    gte(column, value) {
+        this.gteFilter = { column, value }
+        return this
+    }
+
+    order(column, options) {
+        this.sort = { column, ascending: options?.ascending !== false }
+        return this
+    }
+
     maybeSingle() {
         this.singleRowMode = true
         return this
@@ -87,9 +99,22 @@ class MockSupabaseQuery {
     then(resolve, reject) {
         let data = [...this.rows]
 
+        if (this.gteFilter) {
+            data = data.filter((row) => row[this.gteFilter.column] >= this.gteFilter.value)
+        }
+
         this.filters.forEach((filter) => {
             data = data.filter((row) => filter.values.includes(row[filter.column]))
         })
+
+        if (this.sort) {
+            data.sort((left, right) => {
+                const leftValue = left[this.sort.column]
+                const rightValue = right[this.sort.column]
+                const comparison = leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0
+                return this.sort.ascending ? comparison : comparison * -1
+            })
+        }
 
         const result = this.singleRowMode
             ? { data: data[0] || null, error: null }
@@ -196,6 +221,97 @@ test("metrics endpoint exposes Prometheus-formatted sensor and ESG values", asyn
         assert.match(metricsText, /sensor_data_anomaly_flag\{sensor_id="sensor-prom",metric_type="temperature",source="test-suite",owner_uid="unknown",owner_email="unknown",device_name="sensor-prom",severity="warning"\} 1/)
         assert.match(metricsText, /esg_environment_score\{scope="overall"\} 71\.43/)
         assert.match(metricsText, /esg_buffer_size 1/)
+    } finally {
+        await server.close()
+    }
+})
+
+test("export endpoint returns recent in-memory samples as CSV", async () => {
+    const server = await createTestServer()
+    const now = Date.now()
+
+    try {
+        const ingestResponse = await fetch(`${server.baseUrl}/iot/data`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                sensor_id: "sensor-export-memory",
+                metric_type: "temperature",
+                value: 26.4,
+                timestamp: now,
+                source: "test-suite",
+            }),
+        })
+
+        assert.equal(ingestResponse.status, 200)
+
+        const exportResponse = await fetch(`${server.baseUrl}/iot/export/day?sensor_id=sensor-export-memory`)
+        assert.equal(exportResponse.status, 200)
+        assert.match(exportResponse.headers.get("content-type"), /^text\/csv/)
+        assert.equal(
+            exportResponse.headers.get("content-disposition"),
+            'attachment; filename="sensor-readings-day.csv"'
+        )
+
+        const csv = await exportResponse.text()
+        assert.match(csv, /id,sensor_id,metric_type,value,recorded_at,created_at,source,owner_uid,owner_email,device_name/)
+        assert.match(csv, /sensor-export-memory,temperature,26\.4,/)
+        assert.match(csv, /test-suite,unknown,unknown,sensor-export-memory/)
+    } finally {
+        await server.close()
+    }
+})
+
+test("export endpoint prefers stored sensor_readings rows when available", async () => {
+    const now = Date.now()
+    const supabase = new MockSupabaseClient({
+        sensor_readings: [
+            {
+                id: "row-1",
+                sensor_id: "sensor-db",
+                metric_type: "temperature",
+                value: 24.5,
+                recorded_at: new Date(now - 60 * 60 * 1000).toISOString(),
+                created_at: new Date(now - 60 * 60 * 1000).toISOString(),
+            },
+            {
+                id: "row-2",
+                sensor_id: "sensor-db-other",
+                metric_type: "humidity",
+                value: 60.2,
+                recorded_at: new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString(),
+                created_at: new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString(),
+            },
+        ],
+    })
+    const server = await createTestServer({ supabase })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/iot/export/day?sensor_id=sensor-db`)
+        assert.equal(response.status, 200)
+
+        const csv = await response.text()
+        assert.match(csv, /sensor-db,temperature,24\.5,/)
+        assert.doesNotMatch(csv, /sensor-db-other/)
+    } finally {
+        await server.close()
+    }
+})
+
+test("export endpoint falls back to generated sample CSV when no stored or buffered rows exist", async () => {
+    const server = await createTestServer({ supabase: null })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/iot/export/day`)
+        assert.equal(response.status, 200)
+
+        const csv = await response.text()
+        assert.match(csv, /id,sensor_id,metric_type,value,recorded_at,created_at,source,owner_uid,owner_email,device_name/)
+        assert.match(csv, /sensor1,temperature/)
+        assert.match(csv, /sensor2,humidity/)
+        assert.match(csv, /sensor3,air_quality/)
     } finally {
         await server.close()
     }

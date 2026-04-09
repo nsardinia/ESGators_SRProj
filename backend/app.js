@@ -17,6 +17,11 @@ try {
 }
 
 const METRIC_TYPES = ["air_quality", "no2", "temperature", "humidity", "noise_levels"]
+const EXPORT_WINDOWS = {
+    day: { label: "day", days: 1 },
+    week: { label: "week", days: 7 },
+    month: { label: "month", days: 30 },
+}
 const DEFAULT_THRESHOLDS = {
     air_quality: { min: 0, max: 100, warningMax: 150, criticalMax: 150, unit: "aqi" },
     no2: { min: 0, max: 100, warningMax: 150, criticalMax: 150, unit: "ppb" },
@@ -97,6 +102,109 @@ function getByPath(payload, dotPath) {
 
 function createRandomValueWithGenerator(min, max, randomFn) {
     return Number((randomFn() * (max - min) + min).toFixed(2))
+}
+
+function getExportWindow(range) {
+    const selectedWindow = EXPORT_WINDOWS[String(range || "").toLowerCase()]
+
+    if (!selectedWindow) {
+        return null
+    }
+
+    return {
+        ...selectedWindow,
+        sinceMs: Date.now() - selectedWindow.days * 24 * 60 * 60 * 1000,
+    }
+}
+
+function escapeCsvValue(value) {
+    if (value === null || value === undefined) {
+        return ""
+    }
+
+    const stringValue =
+        typeof value === "string" ? value : JSON.stringify(value) ?? String(value)
+
+    if (/[",\n]/.test(stringValue)) {
+        return `"${stringValue.replace(/"/g, '""')}"`
+    }
+
+    return stringValue
+}
+
+function buildSensorReadingsCsv(rows) {
+    const headers = [
+        "id",
+        "sensor_id",
+        "metric_type",
+        "value",
+        "recorded_at",
+        "created_at",
+        "source",
+        "owner_uid",
+        "owner_email",
+        "device_name",
+    ]
+    const lines = rows.map((row) =>
+        headers.map((header) => escapeCsvValue(row?.[header])).join(",")
+    )
+
+    return [headers.join(","), ...lines].join("\n")
+}
+
+function generateFallbackSensorReadings(range) {
+    const selectedWindow = getExportWindow(range) || EXPORT_WINDOWS.day
+    const sensorIds = ["sensor1", "sensor2", "sensor3"]
+    const baseIntervalsPerDay = 12 * 60 * 12
+    const intervalCount = baseIntervalsPerDay * selectedWindow.days
+    const intervalMs = 5 * 1000
+    const baseTime = Date.now()
+    const rows = []
+
+    for (let intervalIndex = 0; intervalIndex < intervalCount; intervalIndex += 1) {
+        const recordedAt = new Date(baseTime - intervalIndex * intervalMs).toISOString()
+
+        sensorIds.forEach((sensorId, sensorIndex) => {
+            METRIC_TYPES.forEach((metricType, metricIndex) => {
+                const baseValueByMetric = {
+                    air_quality: 37,
+                    no2: 14,
+                    temperature: 22.4,
+                    humidity: 51.4,
+                    noise_levels: 43,
+                }
+                const metricTrend = {
+                    air_quality: 0.018,
+                    no2: 0.011,
+                    temperature: 0.009,
+                    humidity: 0.014,
+                    noise_levels: 0.016,
+                }
+                const oscillation = Math.sin((intervalIndex + 1 + sensorIndex) / (6 + metricIndex)) * 1.7
+                const value = Number(
+                    (
+                        baseValueByMetric[metricType]
+                        + intervalIndex * metricTrend[metricType]
+                        + metricIndex * 0.75
+                        + sensorIndex * 1.35
+                        + oscillation
+                    ).toFixed(2)
+                )
+
+                rows.push({
+                    id: `fallback-${selectedWindow.label}-${sensorId}-${metricType}-${intervalIndex + 1}`,
+                    sensor_id: sensorId,
+                    metric_type: metricType,
+                    value,
+                    recorded_at: recordedAt,
+                    created_at: recordedAt,
+                    source: "fallback",
+                })
+            })
+        })
+    }
+
+    return rows.sort((left, right) => right.recorded_at.localeCompare(left.recorded_at))
 }
 
 function hashSeed(input) {
@@ -1014,6 +1122,106 @@ function createApp(options = {}) {
         return { accepted, rejected, pushResult }
     }
 
+    function getBufferedSensorReadings(options) {
+        const selectedWindow = getExportWindow(options.range)
+
+        if (!selectedWindow) {
+            throw new Error("range must be one of: day, week, month")
+        }
+
+        const requestedSensorId = String(options.sensor_id || "").trim()
+        const requestedMetricType = String(options.metric_type || "").trim().toLowerCase()
+
+        return state.sampleBuffer
+            .filter((sample) => Number(sample.timestamp) >= selectedWindow.sinceMs)
+            .filter((sample) => !requestedSensorId || sample.sensor_id === requestedSensorId)
+            .filter((sample) => !requestedMetricType || sample.metric_type === requestedMetricType)
+            .sort((left, right) => Number(right.timestamp) - Number(left.timestamp))
+            .map((sample, index) => {
+                const recordedAt = new Date(Number(sample.timestamp)).toISOString()
+
+                return {
+                    id: `memory-${sample.sensor_id}-${sample.metric_type}-${sample.timestamp}-${index + 1}`,
+                    sensor_id: sample.sensor_id,
+                    metric_type: sample.metric_type,
+                    value: sample.value,
+                    recorded_at: recordedAt,
+                    created_at: recordedAt,
+                    source: sample.source,
+                    owner_uid: sample.owner_uid,
+                    owner_email: sample.owner_email,
+                    device_name: sample.device_name,
+                }
+            })
+    }
+
+    async function getStoredSensorReadings(options) {
+        const selectedWindow = getExportWindow(options.range)
+
+        if (!selectedWindow || !supabase) {
+            return []
+        }
+
+        let query = supabase
+            .from("sensor_readings")
+            .select("id, sensor_id, metric_type, value, recorded_at, created_at")
+            .gte("recorded_at", new Date(selectedWindow.sinceMs).toISOString())
+            .order("recorded_at", { ascending: false })
+
+        if (options.sensor_id) {
+            query = query.eq("sensor_id", options.sensor_id)
+        }
+
+        if (options.metric_type) {
+            query = query.eq("metric_type", options.metric_type)
+        }
+
+        const { data, error } = await query
+
+        if (error) {
+            throw new Error(error.message)
+        }
+
+        return (data || []).map((row) => ({
+            ...row,
+            source: row.source,
+            owner_uid: row.owner_uid,
+            owner_email: row.owner_email,
+            device_name: row.device_name,
+        }))
+    }
+
+    async function exportSensorReadingsCsv(options) {
+        const selectedWindow = getExportWindow(options.range)
+
+        if (!selectedWindow) {
+            throw new Error("range must be one of: day, week, month")
+        }
+
+        let rows = []
+
+        if (supabase) {
+            try {
+                rows = await getStoredSensorReadings(options)
+            } catch (error) {
+                console.warn(`Export DB lookup failed for ${options.range}: ${error.message}`)
+            }
+        }
+
+        if (rows.length === 0) {
+            rows = getBufferedSensorReadings(options)
+        }
+
+        if (rows.length === 0) {
+            rows = generateFallbackSensorReadings(options.range)
+        }
+
+        return {
+            csv: buildSensorReadingsCsv(rows),
+            fileName: `sensor-readings-${selectedWindow.label}.csv`,
+        }
+    }
+
     function getMwbeConfig() {
         return {
             url: process.env.MWBE_API_URL || "",
@@ -1560,6 +1768,33 @@ function createApp(options = {}) {
         res.send(await registry.metrics())
     })
 
+    app.get("/iot/export/:range", async (req, res) => {
+        try {
+            const metricType = String(req.query.metric_type || "").trim().toLowerCase()
+
+            if (metricType && !METRIC_TYPES.includes(metricType)) {
+                res.status(400).json({
+                    error: `metric_type must be one of: ${METRIC_TYPES.join(", ")}`,
+                })
+                return
+            }
+
+            const { csv, fileName } = await exportSensorReadingsCsv({
+                range: req.params.range,
+                sensor_id: String(req.query.sensor_id || "").trim(),
+                metric_type: metricType || undefined,
+            })
+
+            res.setHeader("Content-Type", "text/csv; charset=utf-8")
+            res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`)
+            res.status(200).send(csv)
+        } catch (error) {
+            const statusCode = String(error.message || "").includes("range must be one of") ? 400 : 500
+            console.error(error.message)
+            res.status(statusCode).json({ error: error.message })
+        }
+    })
+
     app.get("/firebase/status", async (req, res) => {
         res.json({
             config: getFirebaseConfig(),
@@ -1889,8 +2124,11 @@ module.exports = {
     DEFAULT_FIREBASE_PROJECT_ID,
     DEFAULT_FIREBASE_DEVICE_ROOT_PATH,
     METRIC_TYPES,
+    buildSensorReadingsCsv,
     normalizeFirebaseDevicePayload,
     normalizeFirebaseTimestamp,
+    generateFallbackSensorReadings,
+    getExportWindow,
     createApp,
     startServer,
 }
