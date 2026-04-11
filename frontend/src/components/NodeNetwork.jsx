@@ -4,7 +4,8 @@ import Button from "./ui/button"
 import { getAuthHeaders } from "../lib/api"
 import { Card, CardContent } from "./ui/card"
 import { API_BASE_URL } from "../lib/api"
-import { auth, database } from "../lib/firebase"
+import { auth } from "../lib/firebase-auth"
+import { database } from "../lib/firebase-database"
 import "./NodeNetwork.css"
 
 const NODE_RADIUS = 42

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { onValue, ref } from "firebase/database"
 import { API_BASE_URL, MWBE_API_BASE_URL, getAuthHeaders } from "../lib/api"
-import { database } from "../lib/firebase"
+import { database } from "../lib/firebase-database"
 
 function mapOwnedDevice(device, previousNode) {
   return {

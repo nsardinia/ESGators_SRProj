@@ -11,7 +11,7 @@
 import { useEffect } from "react"
 import { Navigate, useLocation } from "react-router-dom"
 import { useAuth } from "../components/AuthContext"
-import { isFirebaseConfigured, notifyFirebaseConfigError } from "../lib/firebase"
+import { isFirebaseConfigured, notifyFirebaseConfigError } from "../lib/firebase-core"
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
