@@ -12,7 +12,7 @@ import Input from "../components/ui/input"
 import Textarea from "../components/ui/textarea"
 import { useAuth } from "../components/AuthContext"
 import useOwnedNodes from "../hooks/useOwnedNodes"
-import { MWBE_API_BASE_URL, getAuthHeaders } from "../lib/api"
+import { API_BASE_URL, MWBE_API_BASE_URL, getAuthHeaders } from "../lib/api"
 import "./NodeMapPage.css"
 
 function formatLastUpdate(updatedAtMs) {
@@ -80,7 +80,7 @@ function NodeMapPage() {
     try {
       await syncOwner()
 
-      const response = await fetch(`${MWBE_API_BASE_URL}/devices/claim`, {
+      const response = await fetch(`${API_BASE_URL}/devices/claim`, {
         method: "POST",
         headers: await getAuthHeaders(user, {
           "Content-Type": "application/json",

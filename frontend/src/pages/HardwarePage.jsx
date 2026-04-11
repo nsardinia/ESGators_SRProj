@@ -2,6 +2,24 @@ import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent } from "../components/ui/card"
 import Button from "../components/ui/button"
 
+const documentationLinks = [
+  {
+    label: "Documentation Home",
+    href: "/docs/",
+    description: "Project overview, local setup notes, and the main docs landing page.",
+  },
+  {
+    label: "Backend API Docs",
+    href: "/docs/backend-api/",
+    description: "Service architecture, endpoints, and generated API documentation references.",
+  },
+  {
+    label: "Frontend Structure",
+    href: "/docs/frontend-structure/",
+    description: "Frontend organization, routing, and UI architecture notes.",
+  },
+]
+
 const hardwareOptions = [
   {
     id: "radio-enabled-node",
@@ -200,6 +218,30 @@ function HardwarePage() {
         Device Information
       </p>
       <h1 className="mb-2 text-[clamp(1.4rem,2.4vw,2rem)] font-semibold text-[var(--text)]">Available Hardware</h1>
+      <div className="mb-5 rounded-[18px] border border-[rgba(96,165,250,0.18)] bg-[linear-gradient(135deg,rgba(15,23,42,0.92),rgba(30,41,59,0.88))] p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div className="max-w-[60ch]">
+            <p className="text-[0.78rem] font-semibold uppercase tracking-[0.16em] text-[#93c5fd]">
+              Documentation
+            </p>
+            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+              Need setup steps, architecture notes, or API references while working with hardware? Open the project docs directly from here.
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          {documentationLinks.map((link) => (
+            <a
+              key={link.href}
+              href={link.href}
+              className="rounded-[14px] border border-[rgba(96,165,250,0.16)] bg-[rgba(15,23,42,0.72)] px-4 py-3 transition-colors hover:border-[rgba(96,165,250,0.36)] hover:bg-[rgba(37,99,235,0.08)]"
+            >
+              <p className="text-sm font-semibold text-[#bfdbfe]">{link.label}</p>
+              <p className="mt-1 text-sm text-[var(--muted)]">{link.description}</p>
+            </a>
+          ))}
+        </div>
+      </div>
       <div className="grid gap-5 md:grid-cols-2">
         {hardwareOptions.map((option) => (
           <button

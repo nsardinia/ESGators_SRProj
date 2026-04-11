@@ -199,6 +199,54 @@ function generateDeviceSecret() {
   return crypto.randomBytes(32).toString("base64url");
 }
 
+function encodeOwnerHint(ownerUid) {
+  return Buffer.from(String(ownerUid || ""), "utf8").toString("base64url");
+}
+
+function createProvisioningSecret(ownerUid, rawSecret) {
+  const normalizedOwnerUid = String(ownerUid || "").trim();
+  const normalizedRawSecret = String(rawSecret || "").trim();
+
+  if (!normalizedOwnerUid || !normalizedRawSecret) {
+    return normalizedRawSecret;
+  }
+
+  return `esg1.${encodeOwnerHint(normalizedOwnerUid)}.${normalizedRawSecret}`;
+}
+
+function parseProvisioningSecret(secret) {
+  const normalizedSecret = String(secret || "").trim();
+
+  if (!normalizedSecret) {
+    return {
+      ownerHint: "",
+      rawSecret: "",
+    };
+  }
+
+  const parts = normalizedSecret.split(".");
+  if (parts.length !== 3 || parts[0] !== "esg1") {
+    return {
+      ownerHint: "",
+      rawSecret: normalizedSecret,
+    };
+  }
+
+  try {
+    const ownerHint = Buffer.from(parts[1], "base64url").toString("utf8").trim();
+
+    return {
+      ownerHint,
+      rawSecret: parts[2],
+    };
+  } catch {
+    return {
+      ownerHint: "",
+      rawSecret: normalizedSecret,
+    };
+  }
+}
+
 function createSecretHash(secret) {
   const salt = crypto.randomBytes(16);
   const derived = crypto.scryptSync(secret, salt, 64);
@@ -263,6 +311,20 @@ async function findOwnerByDeviceOwnerKey(app, ownerKey) {
   }
 
   return findOwner(app, ownerKey);
+}
+
+function ownerMatchesHint(owner, ownerHint) {
+  const normalizedOwnerHint = String(ownerHint || "").trim();
+
+  if (!normalizedOwnerHint) {
+    return true;
+  }
+
+  const ownerKeys = [owner?.id, owner?.firebase_uid]
+    .filter(Boolean)
+    .map((value) => String(value).trim());
+
+  return ownerKeys.includes(normalizedOwnerHint);
 }
 
 async function loadOwnersByKeys(app, ownerKeys) {
@@ -621,7 +683,7 @@ async function devicesRoutes(app) {
     reply.code(201);
     return {
       deviceId,
-      deviceSecret,
+      deviceSecret: createProvisioningSecret(owner.firebase_uid || owner.id, deviceSecret),
     };
   }
 
@@ -693,6 +755,7 @@ async function devicesRoutes(app) {
       ensureFirebase(app);
 
       const { deviceId, deviceSecret } = request.body;
+      const parsedSecret = parseProvisioningSecret(deviceSecret);
 
       const { data: device, error } = await app.supabase
         .from("devices")
@@ -712,7 +775,7 @@ async function devicesRoutes(app) {
         throw app.httpErrors.forbidden("Device is not active");
       }
 
-      if (!verifySecret(deviceSecret, device.device_code_hash)) {
+      if (!verifySecret(parsedSecret.rawSecret, device.device_code_hash)) {
         throw app.httpErrors.unauthorized("Invalid device credentials");
       }
 
@@ -720,6 +783,10 @@ async function devicesRoutes(app) {
 
       if (!owner?.firebase_uid) {
         throw app.httpErrors.forbidden("Device owner is not configured for Firebase access");
+      }
+
+      if (!ownerMatchesHint(owner, parsedSecret.ownerHint)) {
+        throw app.httpErrors.unauthorized("Invalid device credentials");
       }
 
       const firebaseRootPath = `/users/${owner.firebase_uid}`;

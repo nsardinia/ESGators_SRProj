@@ -177,6 +177,8 @@ Without these values, the API still runs, but Grafana push is skipped.
 - `GET /devices/:deviceId/history?limit=360` fetch historical telemetry for one authenticated caller device
 - `POST /devices/provision` mint a Firebase custom token for a device
 
+Claimed device secrets remain a single `deviceSecret` value. Newer secrets can carry an embedded owner hint so hardware clients do not need a separate owner UID environment variable.
+
 Protected owner-scoped routes now require a Firebase user ID token in the `Authorization: Bearer <token>` header. The backend derives the owner from the verified token instead of trusting `ownerUid` from the client.
 
 ## 6. Scripts

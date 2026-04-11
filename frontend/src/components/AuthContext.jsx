@@ -5,7 +5,7 @@
  */
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 import { onAuthStateChanged } from "firebase/auth"
-import { BACKEND_API_BASE_URL, MWBE_API_BASE_URL } from "../lib/api"
+import { BACKEND_API_BASE_URL, MWBE_API_BASE_URL, getAuthHeaders } from "../lib/api"
 import { auth, isFirebaseConfigured } from "../lib/firebase"
 
 const AuthContext = createContext(null)
@@ -37,8 +37,6 @@ function AuthProvider({ children }) {
 
     let ignore = false
     let syncInFlight = false
-    let ownerFirebaseUid = null
-
     const ensureOwner = async () => {
       const ownerResponse = await fetch(`${MWBE_API_BASE_URL}/users`, {
         method: "POST",
@@ -64,9 +62,10 @@ function AuthProvider({ children }) {
       return ownerPayload.user.firebase_uid
     }
 
-    const loadOwnedDeviceIds = async (ownerFirebaseUid) => {
-      const params = new URLSearchParams({ ownerUid: ownerFirebaseUid })
-      const response = await fetch(`${MWBE_API_BASE_URL}/devices/owned?${params.toString()}`)
+    const loadOwnedDeviceIds = async () => {
+      const response = await fetch(`${MWBE_API_BASE_URL}/devices/owned`, {
+        headers: await getAuthHeaders(user),
+      })
       const payload = await response.json().catch(() => ({}))
 
       if (!response.ok) {
@@ -91,11 +90,9 @@ function AuthProvider({ children }) {
       syncInFlight = true
 
       try {
-        if (!ownerFirebaseUid) {
-          ownerFirebaseUid = await ensureOwner()
-        }
+        await ensureOwner()
 
-        const deviceIds = await loadOwnedDeviceIds(ownerFirebaseUid)
+        const deviceIds = await loadOwnedDeviceIds()
 
         if (deviceIds.length === 0) {
           return
