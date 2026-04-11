@@ -2,6 +2,8 @@ node_modules/
 firebase-key.json
 .env
 firebaseServiceKeys.json
+backend/kalshi*.key
+backend/kalshi*.pem
 .history/
 frontend/.history/
 mwbe/.history/

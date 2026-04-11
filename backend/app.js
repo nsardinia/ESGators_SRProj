@@ -2,7 +2,9 @@ require("dotenv").config()
 
 const express = require("express")
 const cors = require("cors")
+const fs = require("node:fs")
 const path = require("node:path")
+const crypto = require("node:crypto")
 const axios = require("axios")
 const protobuf = require("protobufjs")
 const snappy = require("snappy")
@@ -36,6 +38,36 @@ const DEFAULT_FIREBASE_SYNC_INTERVAL_MS = 5000
 const DEFAULT_FIREBASE_OWNER_SYNC_INTERVAL_MS = 1000
 const FIREBASE_TIMESTAMP_MIN_SECONDS = 946684800
 const FIREBASE_TIMESTAMP_MIN_MS = FIREBASE_TIMESTAMP_MIN_SECONDS * 1000
+const DEFAULT_KALSHI_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
+const DEFAULT_KALSHI_DEMO_BASE_URL = "https://demo-api.kalshi.co/trade-api/v2"
+const KALSHI_MARKETS_QUERY_PARAMS = [
+    "limit",
+    "cursor",
+    "event_ticker",
+    "series_ticker",
+    "min_created_ts",
+    "max_created_ts",
+    "min_updated_ts",
+    "max_close_ts",
+    "min_close_ts",
+    "min_settled_ts",
+    "max_settled_ts",
+    "status",
+    "tickers",
+    "mve_filter",
+]
+const KALSHI_PORTFOLIO_QUERY_PARAMS = [
+    "cursor",
+    "limit",
+    "count_filter",
+    "ticker",
+    "event_ticker",
+    "min_ts",
+    "max_ts",
+    "status",
+    "subaccount",
+]
+const KALSHI_ORDERBOOK_QUERY_PARAMS = ["depth"]
 const DEFAULT_DEVICE_OWNER_LABELS = {
     owner_uid: "unknown",
     owner_email: "unknown",
@@ -83,6 +115,280 @@ function parseBoolean(value, fallback = false) {
     }
 
     return ["1", "true", "yes", "on"].includes(String(value).toLowerCase())
+}
+
+function normalizeKalshiBaseUrl(value) {
+    const normalized = String(value || "").trim().replace(/\/+$/, "")
+    return normalized || DEFAULT_KALSHI_BASE_URL
+}
+
+function getKalshiConfig() {
+    const environment = String(
+        process.env.KALSHI_ENVIRONMENT || process.env.KALSHI_ENV || "production"
+    ).trim().toLowerCase()
+    const configuredBaseUrl = String(process.env.KALSHI_API_BASE_URL || "").trim()
+    const baseUrl = normalizeKalshiBaseUrl(
+        configuredBaseUrl
+        || (environment === "demo" || environment === "sandbox"
+            ? DEFAULT_KALSHI_DEMO_BASE_URL
+            : DEFAULT_KALSHI_BASE_URL)
+    )
+    const privateKeyPem = process.env.KALSHI_PRIVATE_KEY_PEM
+        ? String(process.env.KALSHI_PRIVATE_KEY_PEM).replace(/\\n/g, "\n")
+        : ""
+    const privateKeyBase64 = String(
+        process.env.KALSHI_PRIVATE_KEY_PEM_BASE64
+        || process.env.KALSHI_PRIVATE_KEY_BASE64
+        || ""
+    ).trim()
+    const privateKeyPath = String(process.env.KALSHI_PRIVATE_KEY_PATH || "").trim()
+    const apiKeyId = String(
+        process.env.KALSHI_API_KEY_ID
+        || process.env.KALSHI_ACCESS_KEY
+        || ""
+    ).trim()
+    const rawTimeoutMs = Number(process.env.KALSHI_API_TIMEOUT_MS || 10000)
+    const privateKeySource = privateKeyPem
+        ? "env"
+        : privateKeyBase64
+            ? "base64_env"
+            : privateKeyPath
+                ? "file"
+                : "none"
+
+    return {
+        environment,
+        baseUrl,
+        apiKeyId,
+        privateKeyPem,
+        privateKeyBase64,
+        privateKeyPath,
+        privateKeySource,
+        timeoutMs: Number.isFinite(rawTimeoutMs) && rawTimeoutMs > 0 ? rawTimeoutMs : 10000,
+        authConfigured: Boolean(apiKeyId && (privateKeyPem || privateKeyBase64 || privateKeyPath)),
+    }
+}
+
+function getPublicKalshiConfig(config = getKalshiConfig()) {
+    return {
+        environment: config.environment,
+        baseUrl: config.baseUrl,
+        timeoutMs: config.timeoutMs,
+        authConfigured: config.authConfigured,
+        hasApiKeyId: Boolean(config.apiKeyId),
+        hasPrivateKey: config.privateKeySource !== "none",
+        privateKeySource: config.privateKeySource,
+    }
+}
+
+function loadKalshiPrivateKey(config) {
+    if (config.privateKeyPem) {
+        return config.privateKeyPem
+    }
+
+    if (config.privateKeyBase64) {
+        return Buffer.from(config.privateKeyBase64, "base64").toString("utf8")
+    }
+
+    if (config.privateKeyPath) {
+        const keyPath = path.isAbsolute(config.privateKeyPath)
+            ? config.privateKeyPath
+            : path.resolve(process.cwd(), config.privateKeyPath)
+        return fs.readFileSync(keyPath, "utf8")
+    }
+
+    return ""
+}
+
+function createKalshiSignature(privateKey, timestamp, method, requestPath) {
+    const pathWithoutQuery = String(requestPath || "").split("?")[0]
+    const signer = crypto.createSign("RSA-SHA256")
+    signer.update(`${timestamp}${String(method || "GET").toUpperCase()}${pathWithoutQuery}`)
+    signer.end()
+
+    return signer.sign({
+        key: privateKey,
+        padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+        saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST,
+    }).toString("base64")
+}
+
+function buildKalshiAuthHeaders(config, method, requestPath) {
+    if (!config.authConfigured) {
+        throw new Error(
+            "Kalshi auth is not configured. Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH or KALSHI_PRIVATE_KEY_PEM."
+        )
+    }
+
+    const timestamp = String(Date.now())
+    const privateKey = loadKalshiPrivateKey(config)
+    const signature = createKalshiSignature(privateKey, timestamp, method, requestPath)
+
+    return {
+        "KALSHI-ACCESS-KEY": config.apiKeyId,
+        "KALSHI-ACCESS-SIGNATURE": signature,
+        "KALSHI-ACCESS-TIMESTAMP": timestamp,
+    }
+}
+
+function pickKalshiQueryParams(query, allowedKeys) {
+    return allowedKeys.reduce((params, key) => {
+        const value = query?.[key]
+
+        if (value !== undefined && value !== "") {
+            params[key] = value
+        }
+
+        return params
+    }, {})
+}
+
+function buildKalshiPath(...segments) {
+    return `/${segments
+        .map((segment) => String(segment || "").trim().replace(/^\/+|\/+$/g, ""))
+        .filter(Boolean)
+        .map((segment) => encodeURIComponent(segment))
+        .join("/")}`
+}
+
+function formatKalshiError(error) {
+    const status = Number(error?.response?.status)
+    const responseBody = error?.response?.data
+    const detail = responseBody
+        ? (typeof responseBody === "string" ? responseBody : JSON.stringify(responseBody))
+        : error.message
+    const isMissingAuth = String(error?.message || "").includes("Kalshi auth is not configured")
+
+    return {
+        statusCode: isMissingAuth
+            ? 503
+            : Number.isFinite(status) && status >= 400
+                ? status
+                : 500,
+        detail,
+    }
+}
+
+function parseKalshiPriceToCents(value) {
+    const numericValue = Number(value)
+
+    if (!Number.isFinite(numericValue)) {
+        return null
+    }
+
+    if (numericValue > 0 && numericValue < 1) {
+        return clamp(Math.round(numericValue * 100), 1, 99)
+    }
+
+    if (numericValue >= 1 && numericValue <= 99) {
+        return clamp(Math.round(numericValue), 1, 99)
+    }
+
+    return null
+}
+
+function formatKalshiPriceDollars(priceCents) {
+    if (!Number.isFinite(Number(priceCents))) {
+        return null
+    }
+
+    return (Number(priceCents) / 100).toFixed(4)
+}
+
+function extractKalshiMarket(payload) {
+    if (!payload || typeof payload !== "object") {
+        return null
+    }
+
+    return payload.market || payload
+}
+
+function extractKalshiOrderbook(payload) {
+    const book = payload?.orderbook_fp || payload?.orderbook || payload || {}
+
+    return {
+        yes: Array.isArray(book.yes_dollars)
+            ? book.yes_dollars
+            : Array.isArray(book.yes)
+                ? book.yes
+                : [],
+        no: Array.isArray(book.no_dollars)
+            ? book.no_dollars
+            : Array.isArray(book.no)
+                ? book.no
+                : [],
+    }
+}
+
+function getWeakestMetric(metricScores = {}) {
+    return Object.entries(metricScores).reduce((lowest, [metricType, score]) => {
+        const numericScore = Number(score)
+
+        if (!Number.isFinite(numericScore)) {
+            return lowest
+        }
+
+        if (!lowest || numericScore < lowest.score) {
+            return { metricType, score: numericScore }
+        }
+
+        return lowest
+    }, null)
+}
+
+function buildEsgTradeSignal(esgScore) {
+    const overall = Number(esgScore?.overall)
+
+    if (!Number.isFinite(overall)) {
+        throw new Error("No ESG score is available yet. Ingest ESG samples before requesting a trade plan.")
+    }
+
+    const weakestMetric = getWeakestMetric(esgScore?.metricScores || {})
+    let side = "yes"
+    let count = 1
+    let confidence = "watch"
+    let outlook = "balanced"
+
+    if (overall >= 85) {
+        side = "yes"
+        count = 3
+        confidence = "high"
+        outlook = "positive"
+    } else if (overall >= 70) {
+        side = "yes"
+        count = 2
+        confidence = "moderate"
+        outlook = "positive"
+    } else if (overall >= 55) {
+        side = "no"
+        count = 1
+        confidence = "moderate"
+        outlook = "defensive"
+    } else {
+        side = "no"
+        count = 3
+        confidence = "high"
+        outlook = "defensive"
+    }
+
+    const weakestMetricText = weakestMetric
+        ? `${weakestMetric.metricType} (${weakestMetric.score.toFixed(2)})`
+        : "no metric breakdown"
+    const rationale = side === "yes"
+        ? `Overall ESG score ${overall.toFixed(2)} supports a YES bias. Weakest metric: ${weakestMetricText}.`
+        : `Overall ESG score ${overall.toFixed(2)} is weak enough to hedge with NO. Weakest metric: ${weakestMetricText}.`
+
+    return {
+        overall: Number(overall.toFixed(2)),
+        side,
+        action: "buy",
+        count,
+        confidence,
+        outlook,
+        weakestMetric: weakestMetric?.metricType || null,
+        weakestMetricScore: weakestMetric ? Number(weakestMetric.score.toFixed(2)) : null,
+        rationale,
+    }
 }
 
 function clamp(value, min, max) {
@@ -406,6 +712,7 @@ function normalizeDeviceOwnerLabels(metadata = {}) {
 function createApp(options = {}) {
     const firebaseDb = options.firebaseDb === undefined ? db : options.firebaseDb
     const supabase = options.supabase === undefined ? createSupabaseFromEnv() : options.supabase
+    const kalshiHttpClient = options.kalshiHttpClient || axios
     const app = express()
     const registry = new promClient.Registry()
     const state = {
@@ -1241,6 +1548,143 @@ function createApp(options = {}) {
         }
     }
 
+    async function callKalshiApi({
+        endpointPath,
+        method = "GET",
+        params = {},
+        authRequired = false,
+        data = undefined,
+        headers: customHeaders = {},
+    }) {
+        const config = getKalshiConfig()
+        const normalizedEndpointPath = String(endpointPath || "").startsWith("/")
+            ? String(endpointPath)
+            : `/${endpointPath}`
+        const url = new URL(`${config.baseUrl}${normalizedEndpointPath}`)
+        const headers = { ...customHeaders }
+
+        if (authRequired || parseBoolean(process.env.KALSHI_SIGN_PUBLIC_REQUESTS, false)) {
+            Object.assign(headers, buildKalshiAuthHeaders(config, method, url.pathname))
+        }
+
+        const response = await kalshiHttpClient({
+            method,
+            url: url.toString(),
+            params,
+            data,
+            headers,
+            timeout: config.timeoutMs,
+            validateStatus: (status) => status >= 200 && status < 300,
+        })
+
+        return response.data
+    }
+
+    function resolveKalshiLimitPriceCents(marketDetail, orderbook, side) {
+        const lastPrice = parseKalshiPriceToCents(marketDetail?.last_price)
+        const sideLevels = side === "yes" ? orderbook?.yes : orderbook?.no
+        const topLevelPrice = Array.isArray(sideLevels?.[0])
+            ? parseKalshiPriceToCents(sideLevels[0][0])
+            : null
+        const fallbackNoFromLast = Number.isFinite(lastPrice) ? 100 - lastPrice : null
+        const candidates = side === "yes"
+            ? [
+                parseKalshiPriceToCents(marketDetail?.yes_ask),
+                parseKalshiPriceToCents(marketDetail?.yes_price),
+                topLevelPrice,
+                lastPrice,
+            ]
+            : [
+                parseKalshiPriceToCents(marketDetail?.no_ask),
+                parseKalshiPriceToCents(marketDetail?.no_price),
+                topLevelPrice,
+                fallbackNoFromLast,
+            ]
+
+        return candidates.find((candidate) => Number.isFinite(candidate)) ?? 50
+    }
+
+    async function buildEsgTradePlan({ ticker, count, side, action, subaccount } = {}) {
+        const normalizedTicker = String(ticker || "").trim()
+
+        if (!normalizedTicker) {
+            throw new Error("ticker is required to build an ESG trade plan")
+        }
+
+        const esgScore = state.lastEsgScore
+        const signal = buildEsgTradeSignal(esgScore)
+        const marketPayload = await callKalshiApi({
+            endpointPath: buildKalshiPath("markets", normalizedTicker),
+        })
+        const orderbookPayload = await callKalshiApi({
+            endpointPath: buildKalshiPath("markets", normalizedTicker, "orderbook"),
+            params: { depth: 10 },
+        })
+        const marketDetail = extractKalshiMarket(marketPayload)
+        const orderbook = extractKalshiOrderbook(orderbookPayload)
+
+        if (!marketDetail) {
+            throw new Error(`Kalshi market ${normalizedTicker} was not found`)
+        }
+
+        const resolvedSide = ["yes", "no"].includes(String(side || "").trim().toLowerCase())
+            ? String(side).trim().toLowerCase()
+            : signal.side
+        const resolvedAction = ["buy", "sell"].includes(String(action || "").trim().toLowerCase())
+            ? String(action).trim().toLowerCase()
+            : signal.action
+        const resolvedCount = Number.isInteger(Number(count)) && Number(count) > 0
+            ? Number(count)
+            : signal.count
+        const limitPriceCents = resolveKalshiLimitPriceCents(marketDetail, orderbook, resolvedSide)
+        const orderPreview = {
+            ticker: normalizedTicker,
+            client_order_id: crypto.randomUUID(),
+            side: resolvedSide,
+            action: resolvedAction,
+            count: resolvedCount,
+            time_in_force: "fill_or_kill",
+            cancel_order_on_pause: true,
+        }
+
+        if (resolvedSide === "yes") {
+            orderPreview.yes_price = limitPriceCents
+        } else {
+            orderPreview.no_price = limitPriceCents
+        }
+
+        if (Number.isInteger(Number(subaccount)) && Number(subaccount) >= 0) {
+            orderPreview.subaccount = Number(subaccount)
+        }
+
+        return {
+            generatedAt: Date.now(),
+            esg: esgScore,
+            signal: {
+                ...signal,
+                side: resolvedSide,
+                action: resolvedAction,
+                count: resolvedCount,
+                limitPriceCents,
+                limitPriceDollars: formatKalshiPriceDollars(limitPriceCents),
+            },
+            market: {
+                ticker: marketDetail.ticker || normalizedTicker,
+                title: marketDetail.title || marketDetail.subtitle || marketDetail.question || normalizedTicker,
+                status: marketDetail.status || null,
+                closeTime: marketDetail.close_time || marketDetail.expiration_time || null,
+                yesAsk: parseKalshiPriceToCents(marketDetail.yes_ask),
+                noAsk: parseKalshiPriceToCents(marketDetail.no_ask),
+                lastPrice: parseKalshiPriceToCents(marketDetail.last_price),
+            },
+            orderbook: {
+                yes: orderbook.yes.slice(0, 6),
+                no: orderbook.no.slice(0, 6),
+            },
+            orderPreview,
+        }
+    }
+
     function normalizeMwbePayload(payload, config) {
         const rawItems = getByPath(payload, config.responsePath)
         const items = Array.isArray(rawItems)
@@ -1860,6 +2304,176 @@ function createApp(options = {}) {
         })
     })
 
+    app.get("/kalshi/status", async (req, res) => {
+        res.json({
+            config: getPublicKalshiConfig(),
+            routes: {
+                markets: "GET /kalshi/markets",
+                market: "GET /kalshi/markets/:ticker",
+                orderbook: "GET /kalshi/markets/:ticker/orderbook",
+                balance: "GET /kalshi/portfolio/balance",
+                positions: "GET /kalshi/portfolio/positions",
+                orders: "GET /kalshi/portfolio/orders",
+                esgTradePlan: "GET /kalshi/esg/trade-plan?ticker=MARKET_TICKER",
+                esgTradeOrder: "POST /kalshi/esg/trade-order",
+            },
+        })
+    })
+
+    app.get("/kalshi/markets", async (req, res) => {
+        try {
+            const data = await callKalshiApi({
+                endpointPath: "/markets",
+                params: pickKalshiQueryParams(req.query, KALSHI_MARKETS_QUERY_PARAMS),
+            })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi markets fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi markets", detail })
+        }
+    })
+
+    app.get("/kalshi/markets/:ticker", async (req, res) => {
+        try {
+            const data = await callKalshiApi({
+                endpointPath: buildKalshiPath("markets", req.params.ticker),
+            })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi market fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi market", detail })
+        }
+    })
+
+    app.get("/kalshi/markets/:ticker/orderbook", async (req, res) => {
+        try {
+            const data = await callKalshiApi({
+                endpointPath: buildKalshiPath("markets", req.params.ticker, "orderbook"),
+                params: pickKalshiQueryParams(req.query, KALSHI_ORDERBOOK_QUERY_PARAMS),
+            })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi orderbook fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi orderbook", detail })
+        }
+    })
+
+    app.get("/kalshi/portfolio/balance", async (req, res) => {
+        try {
+            const data = await callKalshiApi({
+                endpointPath: "/portfolio/balance",
+                params: pickKalshiQueryParams(req.query, ["subaccount"]),
+                authRequired: true,
+            })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi balance fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi balance", detail })
+        }
+    })
+
+    app.get("/kalshi/portfolio/positions", async (req, res) => {
+        try {
+            const data = await callKalshiApi({
+                endpointPath: "/portfolio/positions",
+                params: pickKalshiQueryParams(req.query, KALSHI_PORTFOLIO_QUERY_PARAMS),
+                authRequired: true,
+            })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi positions fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi positions", detail })
+        }
+    })
+
+    app.get("/kalshi/portfolio/orders", async (req, res) => {
+        try {
+            const data = await callKalshiApi({
+                endpointPath: "/portfolio/orders",
+                params: pickKalshiQueryParams(req.query, KALSHI_PORTFOLIO_QUERY_PARAMS),
+                authRequired: true,
+            })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi orders fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi orders", detail })
+        }
+    })
+
+    app.get("/kalshi/esg/trade-plan", async (req, res) => {
+        try {
+            const plan = await buildEsgTradePlan({
+                ticker: req.query.ticker,
+                count: req.query.count,
+                side: req.query.side,
+                action: req.query.action,
+                subaccount: req.query.subaccount,
+            })
+
+            res.json(plan)
+        } catch (error) {
+            const missingEsg = String(error.message || "").includes("No ESG score is available yet")
+            const statusCode = missingEsg || String(error.message || "").includes("ticker is required") ? 400 : 500
+
+            if (statusCode === 500) {
+                console.error(`Kalshi ESG trade plan failed: ${error.message}`)
+            }
+
+            res.status(statusCode).json({ error: "Failed to build ESG trade plan", detail: error.message })
+        }
+    })
+
+    app.post("/kalshi/esg/trade-order", async (req, res) => {
+        try {
+            const payload = req.body || {}
+            const plan = await buildEsgTradePlan({
+                ticker: payload.ticker ?? req.query.ticker,
+                count: payload.count ?? req.query.count,
+                side: payload.side ?? req.query.side,
+                action: payload.action ?? req.query.action,
+                subaccount: payload.subaccount ?? req.query.subaccount,
+            })
+            const orderResult = await callKalshiApi({
+                endpointPath: "/portfolio/orders",
+                method: "POST",
+                authRequired: true,
+                data: plan.orderPreview,
+                headers: {
+                    "Content-Type": "application/json",
+                },
+            })
+
+            res.status(201).json({
+                status: "success",
+                plan,
+                order: orderResult,
+            })
+        } catch (error) {
+            const missingEsg = String(error.message || "").includes("No ESG score is available yet")
+            const missingTicker = String(error.message || "").includes("ticker is required")
+            const { statusCode, detail } = formatKalshiError(error)
+            const resolvedStatusCode = missingEsg || missingTicker ? 400 : statusCode
+
+            if (resolvedStatusCode >= 500) {
+                console.error(`Kalshi ESG trade order failed: ${detail}`)
+            }
+
+            res.status(resolvedStatusCode).json({ error: "Failed to submit ESG trade order", detail })
+        }
+    })
+
     app.put("/mwbe/config", async (req, res) => {
         const payload = req.body || {}
         runtimeOverrides.mwbeConfig = {
@@ -2074,6 +2688,8 @@ function createApp(options = {}) {
         helpers: {
             getEsgConfig,
             getFirebaseConfig,
+            getKalshiConfig,
+            buildEsgTradePlan,
             resolveThresholds,
             evaluateAnomaly,
             ingestSamples,
@@ -2120,14 +2736,19 @@ function startServer(options = {}) {
 }
 
 module.exports = {
+    DEFAULT_KALSHI_BASE_URL,
+    DEFAULT_KALSHI_DEMO_BASE_URL,
     DEFAULT_FIREBASE_DATABASE_URL,
     DEFAULT_FIREBASE_PROJECT_ID,
     DEFAULT_FIREBASE_DEVICE_ROOT_PATH,
     METRIC_TYPES,
     buildSensorReadingsCsv,
+    createKalshiSignature,
     normalizeFirebaseDevicePayload,
     normalizeFirebaseTimestamp,
     generateFallbackSensorReadings,
+    getKalshiConfig,
+    getPublicKalshiConfig,
     getExportWindow,
     createApp,
     startServer,

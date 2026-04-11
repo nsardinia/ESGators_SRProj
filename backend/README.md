@@ -54,6 +54,16 @@ Optional Firebase RTDB sync config:
 - `FIREBASE_SYNC_INTERVAL_MS`
 - `FIREBASE_SYNC_ON_START`
 
+Optional Kalshi API config:
+- `KALSHI_ENVIRONMENT` (`production` or `demo`)
+- `KALSHI_API_BASE_URL`
+- `KALSHI_API_KEY_ID`
+- `KALSHI_PRIVATE_KEY_PATH`
+- `KALSHI_PRIVATE_KEY_PEM`
+- `KALSHI_PRIVATE_KEY_PEM_BASE64`
+- `KALSHI_API_TIMEOUT_MS`
+- `KALSHI_SIGN_PUBLIC_REQUESTS`
+
 If no Firebase env vars are set, the backend falls back to:
 - project id `senior-project-esgators`
 - RTDB URL `https://senior-project-esgators-default-rtdb.firebaseio.com`
@@ -97,6 +107,10 @@ FIREBASE_DATABASE_URL=https://senior-project-esgators-default-rtdb.firebaseio.co
 VITE_FIREBASE_PROJECT_ID=senior-project-esgators
 FIREBASE_DEVICE_ROOT_PATH=devices
 FIREBASE_SOURCE_NAME=firebase-rtdb
+
+KALSHI_ENVIRONMENT=demo
+KALSHI_API_KEY_ID=your-demo-api-key-id
+KALSHI_PRIVATE_KEY_PATH=./kalshi-api.key
 
 SENSOR_THRESHOLDS_JSON={"temperature":{"min":18,"max":28},"humidity":{"min":30,"max":60}}
 ```
@@ -203,6 +217,15 @@ Samples in red are marked as `critical`.
 - `GET /mwbe/status`: current MWBE sync config and sync status
 - `PUT /mwbe/config`: update MWBE API config at runtime
 - `POST /mwbe/sync`: trigger one immediate MWBE fetch and Prometheus push
+- `GET /kalshi/status`: Kalshi API config status without secrets
+- `GET /kalshi/markets`: public Kalshi markets proxy
+- `GET /kalshi/markets/:ticker`: public Kalshi market details proxy
+- `GET /kalshi/markets/:ticker/orderbook`: public Kalshi orderbook proxy
+- `GET /kalshi/portfolio/balance`: authenticated Kalshi balance proxy
+- `GET /kalshi/portfolio/positions`: authenticated Kalshi positions proxy
+- `GET /kalshi/portfolio/orders`: authenticated Kalshi orders proxy
+- `GET /kalshi/esg/trade-plan`: build an ESG-driven demo trade plan for a market
+- `POST /kalshi/esg/trade-order`: submit the ESG-driven demo order to Kalshi demo trading
 
 Manual ingest example:
 
@@ -243,6 +266,18 @@ Manual MWBE sync example:
 ```bash
 curl -X POST http://localhost:5000/mwbe/sync
 ```
+
+Kalshi examples:
+
+```bash
+curl http://localhost:5000/kalshi/status
+curl "http://localhost:5000/kalshi/markets?status=open&limit=10"
+curl http://localhost:5000/kalshi/markets/MARKET_TICKER_FROM_RESPONSE/orderbook
+curl "http://localhost:5000/kalshi/esg/trade-plan?ticker=MARKET_TICKER_FROM_RESPONSE"
+curl http://localhost:5000/kalshi/portfolio/balance
+```
+
+Kalshi market routes work with demo mode and the public API. Portfolio routes and ESG-driven order submission additionally require the Kalshi private key.
 
 Firebase preview example:
 
