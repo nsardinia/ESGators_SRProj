@@ -115,7 +115,7 @@ function getClusterCenter(nodes) {
 
 function GlobalNodeMap() {
   const { user } = useAuth()
-  const { createdNodes, error: ownedNodesError, loadingNodes } = useOwnedNodes(user)
+  const { createdNodes, error: ownedNodesError, loadingNodes, warning: ownedNodesWarning } = useOwnedNodes(user)
   const mapRef = useRef(null)
   const hasAutoFramedOwnedNodes = useRef(false)
   const [sharedNodes, setSharedNodes] = useState([])
@@ -259,7 +259,7 @@ function GlobalNodeMap() {
   const totalNodeCount = nodesWithLocations.length
   const ownedNodeCount = nodesWithLocations.filter((node) => node.ownership === "owned").length
   const sharedNodeCount = nodesWithLocations.filter((node) => node.ownership === "shared").length
-  const combinedError = ownedNodesError || sharedNodesError
+  const combinedError = ownedNodesError || sharedNodesError || ownedNodesWarning
   const isLoading = loadingNodes || loadingSharedNodes
   const ownedNodesWithLocations = nodesWithLocations.filter((node) => node.ownership === "owned")
   const sortedOwnedNodes = [...ownedNodesWithLocations].sort((left, right) =>

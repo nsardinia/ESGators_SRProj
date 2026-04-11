@@ -17,6 +17,7 @@ function mapOwnedDevice(device, previousNode) {
 function useOwnedNodes(user) {
   const [loadingNodes, setLoadingNodes] = useState(false)
   const [error, setError] = useState("")
+  const [warning, setWarning] = useState("")
   const [createdNodes, setCreatedNodes] = useState([])
 
   const syncOwner = useCallback(async () => {
@@ -76,10 +77,13 @@ function useOwnedNodes(user) {
   const reloadNodes = useCallback(async () => {
     if (!user?.uid || !user.email) {
       setCreatedNodes([])
+      setError("")
+      setWarning("")
       return
     }
 
     setError("")
+    setWarning("")
     const owner = await syncOwner()
     await loadOwnedNodes(owner.firebase_uid)
   }, [loadOwnedNodes, syncOwner, user])
@@ -87,6 +91,8 @@ function useOwnedNodes(user) {
   useEffect(() => {
     if (!user?.uid || !user.email) {
       setCreatedNodes([])
+      setError("")
+      setWarning("")
       return
     }
 
@@ -155,9 +161,10 @@ function useOwnedNodes(user) {
             }
           })
         )
+        setWarning("")
       } catch {
         if (!ignore) {
-          setError("Failed to load node data from Firebase")
+          setWarning("Live telemetry is unavailable right now. Showing node records from MWBE only.")
         }
       }
     }
@@ -173,6 +180,7 @@ function useOwnedNodes(user) {
     createdNodes,
     error,
     loadingNodes,
+    warning,
     setCreatedNodes,
     setError,
     syncOwner,
