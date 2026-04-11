@@ -287,6 +287,23 @@ function parseKalshiPriceToCents(value) {
     return null
 }
 
+function readKalshiMarketPriceCents(marketDetail, centsField, dollarsField) {
+    const candidates = [
+        marketDetail?.[centsField],
+        marketDetail?.[dollarsField],
+    ]
+
+    for (const candidate of candidates) {
+        const parsed = parseKalshiPriceToCents(candidate)
+
+        if (Number.isFinite(parsed)) {
+            return parsed
+        }
+    }
+
+    return null
+}
+
 function formatKalshiPriceDollars(priceCents) {
     if (!Number.isFinite(Number(priceCents))) {
         return null
@@ -1581,7 +1598,7 @@ function createApp(options = {}) {
     }
 
     function resolveKalshiLimitPriceCents(marketDetail, orderbook, side) {
-        const lastPrice = parseKalshiPriceToCents(marketDetail?.last_price)
+        const lastPrice = readKalshiMarketPriceCents(marketDetail, "last_price", "last_price_dollars")
         const sideLevels = side === "yes" ? orderbook?.yes : orderbook?.no
         const topLevelPrice = Array.isArray(sideLevels?.[0])
             ? parseKalshiPriceToCents(sideLevels[0][0])
@@ -1589,14 +1606,14 @@ function createApp(options = {}) {
         const fallbackNoFromLast = Number.isFinite(lastPrice) ? 100 - lastPrice : null
         const candidates = side === "yes"
             ? [
-                parseKalshiPriceToCents(marketDetail?.yes_ask),
-                parseKalshiPriceToCents(marketDetail?.yes_price),
+                readKalshiMarketPriceCents(marketDetail, "yes_ask", "yes_ask_dollars"),
+                readKalshiMarketPriceCents(marketDetail, "yes_price", "yes_price_dollars"),
                 topLevelPrice,
                 lastPrice,
             ]
             : [
-                parseKalshiPriceToCents(marketDetail?.no_ask),
-                parseKalshiPriceToCents(marketDetail?.no_price),
+                readKalshiMarketPriceCents(marketDetail, "no_ask", "no_ask_dollars"),
+                readKalshiMarketPriceCents(marketDetail, "no_price", "no_price_dollars"),
                 topLevelPrice,
                 fallbackNoFromLast,
             ]
@@ -1643,7 +1660,7 @@ function createApp(options = {}) {
             side: resolvedSide,
             action: resolvedAction,
             count: resolvedCount,
-            time_in_force: "fill_or_kill",
+            time_in_force: "good_till_canceled",
             cancel_order_on_pause: true,
         }
 
@@ -1673,9 +1690,9 @@ function createApp(options = {}) {
                 title: marketDetail.title || marketDetail.subtitle || marketDetail.question || normalizedTicker,
                 status: marketDetail.status || null,
                 closeTime: marketDetail.close_time || marketDetail.expiration_time || null,
-                yesAsk: parseKalshiPriceToCents(marketDetail.yes_ask),
-                noAsk: parseKalshiPriceToCents(marketDetail.no_ask),
-                lastPrice: parseKalshiPriceToCents(marketDetail.last_price),
+                yesAsk: readKalshiMarketPriceCents(marketDetail, "yes_ask", "yes_ask_dollars"),
+                noAsk: readKalshiMarketPriceCents(marketDetail, "no_ask", "no_ask_dollars"),
+                lastPrice: readKalshiMarketPriceCents(marketDetail, "last_price", "last_price_dollars"),
             },
             orderbook: {
                 yes: orderbook.yes.slice(0, 6),

@@ -42,6 +42,10 @@ const primaryButtonClassName =
   "inline-flex min-h-10 items-center justify-center rounded-[8px] border border-[rgba(62,207,142,0.45)] bg-[rgba(62,207,142,0.18)] px-4 py-2 text-[0.94rem] text-[#d3f5e4] transition-colors hover:border-[rgba(62,207,142,0.62)] hover:bg-[rgba(62,207,142,0.24)] disabled:cursor-not-allowed disabled:opacity-60"
 const secondaryButtonClassName =
   "inline-flex min-h-10 items-center justify-center rounded-[8px] border border-[var(--border)] bg-[#1a2232] px-4 py-2 text-[0.94rem] text-[var(--text)] transition-colors hover:border-[#334055] hover:bg-[#20293b] disabled:cursor-not-allowed disabled:opacity-60"
+const usdFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+})
 
 function formatDate(value) {
   if (!value) {
@@ -71,6 +75,73 @@ function formatMetricLabel(metricType) {
     .filter(Boolean)
     .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
     .join(" ")
+}
+
+function formatCurrencyFromCents(value) {
+  const numericValue = Number(value)
+
+  if (!Number.isFinite(numericValue)) {
+    return formatValue(value)
+  }
+
+  return usdFormatter.format(numericValue / 100)
+}
+
+function formatUnixTimestamp(value) {
+  const numericValue = Number(value)
+
+  if (!Number.isFinite(numericValue)) {
+    return formatValue(value)
+  }
+
+  const timestampMs = numericValue > 1_000_000_000_000 ? numericValue : numericValue * 1000
+  return new Date(timestampMs).toLocaleString()
+}
+
+function formatPortfolioLabel(key) {
+  if (key === "updated_ts") {
+    return "Updated"
+  }
+
+  return formatMetricLabel(key)
+}
+
+function formatPortfolioValue(key, value) {
+  if (/_ts$/i.test(String(key || ""))) {
+    return formatUnixTimestamp(value)
+  }
+
+  if (/(^balance$|_balance$|_value$|^portfolio_value$|_cost$|_fees$)/i.test(String(key || ""))) {
+    return formatCurrencyFromCents(value)
+  }
+
+  return formatValue(value)
+}
+
+function formatMarketPrice(value) {
+  if (value === null || value === undefined || value === "") {
+    return "-"
+  }
+
+  const numericValue = Number(value)
+
+  if (!Number.isFinite(numericValue)) {
+    return String(value)
+  }
+
+  if (numericValue > 0 && numericValue < 1) {
+    return `${Math.round(numericValue * 100)}c`
+  }
+
+  if (numericValue >= 1 && numericValue <= 99) {
+    return `${Math.round(numericValue)}c`
+  }
+
+  return String(value)
+}
+
+function readMarketPrice(marketDetail, centsField, dollarsField) {
+  return marketDetail?.[centsField] ?? marketDetail?.[dollarsField] ?? null
 }
 
 function extractMarkets(payload) {
@@ -435,7 +506,11 @@ function KalshiPage() {
       return []
     }
 
-    return Object.entries(portfolioBalance).slice(0, 6)
+    return Object.entries(portfolioBalance).slice(0, 6).map(([key, value]) => ({
+      key,
+      label: formatPortfolioLabel(key),
+      value: formatPortfolioValue(key, value),
+    }))
   }, [portfolioBalance])
 
   const metricScores = useMemo(() => {
@@ -499,10 +574,10 @@ function KalshiPage() {
             <p className="text-[0.95rem] text-[var(--muted)]">Checking authenticated routes...</p>
           ) : portfolioBalance ? (
             <div className="grid gap-3 sm:grid-cols-2">
-              {balanceEntries.map(([key, value]) => (
-                <div key={key} className="rounded-[8px] border border-[var(--border)] bg-[#121927] px-4 py-3">
-                  <p className="text-[0.78rem] uppercase tracking-[0.05em] text-[var(--muted)]">{key}</p>
-                  <p className="mt-2 text-[1rem] font-semibold text-[var(--text)]">{formatValue(value)}</p>
+              {balanceEntries.map((entry) => (
+                <div key={entry.key} className="rounded-[8px] border border-[var(--border)] bg-[#121927] px-4 py-3">
+                  <p className="text-[0.78rem] uppercase tracking-[0.05em] text-[var(--muted)]">{entry.label}</p>
+                  <p className="mt-2 text-[1rem] font-semibold text-[var(--text)]">{entry.value}</p>
                 </div>
               ))}
             </div>
@@ -843,12 +918,14 @@ function KalshiPage() {
                   <div className="rounded-[8px] border border-[var(--border)] bg-[#121927] px-4 py-3">
                     <p className="text-[0.78rem] uppercase tracking-[0.05em] text-[var(--muted)]">Yes bid / ask</p>
                     <p className="mt-2 text-[1rem] font-semibold text-[var(--text)]">
-                      {formatValue(marketDetail?.yes_bid)} / {formatValue(marketDetail?.yes_ask)}
+                      {formatMarketPrice(readMarketPrice(marketDetail, "yes_bid", "yes_bid_dollars"))} / {formatMarketPrice(readMarketPrice(marketDetail, "yes_ask", "yes_ask_dollars"))}
                     </p>
                   </div>
                   <div className="rounded-[8px] border border-[var(--border)] bg-[#121927] px-4 py-3">
                     <p className="text-[0.78rem] uppercase tracking-[0.05em] text-[var(--muted)]">Last price</p>
-                    <p className="mt-2 text-[1rem] font-semibold text-[var(--text)]">{formatValue(marketDetail?.last_price)}</p>
+                    <p className="mt-2 text-[1rem] font-semibold text-[var(--text)]">
+                      {formatMarketPrice(readMarketPrice(marketDetail, "last_price", "last_price_dollars"))}
+                    </p>
                   </div>
                 </div>
 

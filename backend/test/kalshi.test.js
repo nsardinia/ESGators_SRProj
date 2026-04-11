@@ -20,6 +20,9 @@ const KALSHI_ENV_KEYS = [
     "KALSHI_PRIVATE_KEY_BASE64",
     "KALSHI_API_TIMEOUT_MS",
     "KALSHI_SIGN_PUBLIC_REQUESTS",
+    "GRAFANA_USERNAME",
+    "GRAFANA_API_KEY",
+    "GRAFANA_PUSH_URL",
 ]
 
 function snapshotKalshiEnv() {
@@ -300,6 +303,7 @@ test("GET /kalshi/esg/trade-plan builds a bullish demo plan from a healthy ESG s
         assert.equal(body.signal.count, 3)
         assert.equal(body.signal.limitPriceCents, 49)
         assert.equal(body.orderPreview.yes_price, 49)
+        assert.equal(body.orderPreview.time_in_force, "good_till_canceled")
         assert.equal(body.esg.overall, 100)
         assert.equal(calls.length, 2)
     } finally {
@@ -410,6 +414,7 @@ test("POST /kalshi/esg/trade-order signs and submits a demo order", async () => 
         assert.equal(orderCall.data.side, "yes")
         assert.equal(orderCall.data.action, "buy")
         assert.equal(orderCall.data.yes_price, 46)
+        assert.equal(orderCall.data.time_in_force, "good_till_canceled")
         assert.equal(orderCall.headers["KALSHI-ACCESS-KEY"], "demo-order-key")
 
         const verifier = crypto.createVerify("RSA-SHA256")

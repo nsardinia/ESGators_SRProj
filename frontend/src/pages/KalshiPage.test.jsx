@@ -185,6 +185,8 @@ describe("KalshiPage", () => {
 
       expect(await screen.findByText(/esg-to-trade demo/i)).toBeInTheDocument()
       expect(await screen.findByText(/signal source/i)).toBeInTheDocument()
+      expect(await screen.findByText("$125.00")).toBeInTheDocument()
+      expect(await screen.findByText("$118.00")).toBeInTheDocument()
       expect(await screen.findByText(/overall score/i)).toBeInTheDocument()
       expect(await screen.findByText(/recommended side/i)).toBeInTheDocument()
       expect(await screen.findByText(/overall esg score 88\.40 supports a yes bias/i)).toBeInTheDocument()
