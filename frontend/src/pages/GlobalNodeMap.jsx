@@ -4,6 +4,13 @@ import { Card, CardContent } from "../components/ui/card"
 import { useAuth } from "../components/AuthContext"
 import useOwnedNodes from "../hooks/useOwnedNodes"
 import { API_BASE_URL } from "../lib/api"
+import {
+  buildNodesWithLocations,
+  getResolvedNodeLocations,
+  readStoredNodeLocations,
+  writeActiveOwnedNodeId,
+  writeStoredNodeLocations,
+} from "../lib/nodeLocations"
 import "./GlobalNodeMap.css"
 
 const GlobalNodeMapCanvas = lazy(() => import("../components/GlobalNodeMapCanvas"))
@@ -156,68 +163,27 @@ function GlobalNodeMap() {
     }
 
     setStoredLocations((currentLocations) => {
-      let didChange = false
-      const nextLocations = { ...currentLocations }
-      const seoulNodeIds = new Set(
-        mapNodes
-          .filter((node) => SEOUL_OWNER_EMAILS.has(String(node.owner?.email || "").toLowerCase()))
-          .map((node) => node.deviceId)
-          .sort()
-          .slice(0, 2)
-      )
-
-      mapNodes.forEach((node) => {
-        const cluster = seoulNodeIds.has(node.deviceId) ? SEOUL_CLUSTER : GAINESVILLE_CLUSTER
-        const nextLocation = createStoredLocation(node.deviceId, cluster)
-        const currentLocation = nextLocations[node.deviceId]
-
-        if (
-          !currentLocation ||
-          currentLocation.label !== nextLocation.label ||
-          currentLocation.latitude !== nextLocation.latitude ||
-          currentLocation.longitude !== nextLocation.longitude
-        ) {
-          nextLocations[node.deviceId] = nextLocation
-          didChange = true
-        }
-      })
+      const { locations: nextLocations, didChange } = getResolvedNodeLocations(mapNodes, currentLocations)
 
       if (!didChange) {
         return currentLocations
       }
 
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(NODE_LOCATION_STORAGE_KEY, JSON.stringify(nextLocations))
-      }
+      writeStoredNodeLocations(nextLocations)
 
       return nextLocations
     })
   }, [mapNodes])
 
   const nodesWithLocations = useMemo(() => {
-    return mapNodes
-      .map((node) => {
-        const location = storedLocations[node.deviceId]
-
-        if (!location) {
-          return null
-        }
-
-        return {
-          ...node,
-          latitude: location.latitude,
-          longitude: location.longitude,
-          locationLabel: location.label,
-        }
-      })
-      .filter(Boolean)
+    return buildNodesWithLocations(mapNodes, storedLocations).nodes
   }, [mapNodes, storedLocations])
 
   const selectedNode = nodesWithLocations.find((node) => node.deviceId === selectedNodeId) || null
   const totalNodeCount = nodesWithLocations.length
   const ownedNodeCount = nodesWithLocations.filter((node) => node.ownership === "owned").length
   const sharedNodeCount = nodesWithLocations.filter((node) => node.ownership === "shared").length
-  const combinedError = ownedNodesError || sharedNodesError
+  const combinedError = ownedNodesError || sharedNodesError || ownedNodesWarning
   const isLoading = loadingNodes || loadingSharedNodes
   const ownedNodesWithLocations = nodesWithLocations.filter((node) => node.ownership === "owned")
   const sortedOwnedNodes = [...ownedNodesWithLocations].sort((left, right) =>

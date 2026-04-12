@@ -182,6 +182,11 @@ function NodeMapPage() {
           {filteredNodes.length} shown / {createdNodes.length} created
         </span>
       </div>
+      {!loadingNodes && warning && (
+        <div className="mb-[14px] rounded-[8px] border border-[rgba(245,158,11,0.35)] bg-[rgba(245,158,11,0.08)] px-[14px] py-3 text-[0.9rem] text-[#f6d28b]">
+          {warning}
+        </div>
+      )}
       <div className="node-canvas">
         <div className="node-canvas-scroll">
           {loadingNodes && <div className="node-empty-state">Loading nodes...</div>}

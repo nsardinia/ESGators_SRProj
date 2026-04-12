@@ -59,6 +59,7 @@ function deriveUpdatedAtMs(telemetry) {
 function useOwnedNodes(user) {
   const [loadingNodes, setLoadingNodes] = useState(false)
   const [error, setError] = useState("")
+  const [warning, setWarning] = useState("")
   const [createdNodes, setCreatedNodes] = useState([])
   const [owner, setOwner] = useState(null)
 

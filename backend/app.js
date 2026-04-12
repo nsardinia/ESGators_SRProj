@@ -2,7 +2,9 @@ require("dotenv").config()
 
 const express = require("express")
 const cors = require("cors")
+const fs = require("node:fs")
 const path = require("node:path")
+const crypto = require("node:crypto")
 const axios = require("axios")
 const protobuf = require("protobufjs")
 const snappy = require("snappy")
@@ -17,6 +19,11 @@ try {
 }
 
 const METRIC_TYPES = ["air_quality", "no2", "temperature", "humidity", "noise_levels"]
+const EXPORT_WINDOWS = {
+    day: { label: "day", days: 1 },
+    week: { label: "week", days: 7 },
+    month: { label: "month", days: 30 },
+}
 const DEFAULT_THRESHOLDS = {
     air_quality: { min: 0, max: 100, warningMax: 150, criticalMax: 150, unit: "aqi" },
     no2: { min: 0, max: 100, warningMax: 150, criticalMax: 150, unit: "ppb" },
@@ -32,6 +39,42 @@ const DEFAULT_FIREBASE_OWNER_SYNC_INTERVAL_MS = 1000
 const DEFAULT_OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses"
 const FIREBASE_TIMESTAMP_MIN_SECONDS = 946684800
 const FIREBASE_TIMESTAMP_MIN_MS = FIREBASE_TIMESTAMP_MIN_SECONDS * 1000
+const DEFAULT_KALSHI_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
+const DEFAULT_KALSHI_DEMO_BASE_URL = "https://demo-api.kalshi.co/trade-api/v2"
+const KALSHI_MARKETS_QUERY_PARAMS = [
+    "limit",
+    "cursor",
+    "event_ticker",
+    "series_ticker",
+    "min_created_ts",
+    "max_created_ts",
+    "min_updated_ts",
+    "max_close_ts",
+    "min_close_ts",
+    "min_settled_ts",
+    "max_settled_ts",
+    "status",
+    "tickers",
+    "mve_filter",
+]
+const KALSHI_EVENTS_QUERY_PARAMS = [
+    "cursor",
+    "series_ticker",
+    "min_close_ts",
+    "min_updated_ts",
+]
+const KALSHI_PORTFOLIO_QUERY_PARAMS = [
+    "cursor",
+    "limit",
+    "count_filter",
+    "ticker",
+    "event_ticker",
+    "min_ts",
+    "max_ts",
+    "status",
+    "subaccount",
+]
+const KALSHI_ORDERBOOK_QUERY_PARAMS = ["depth"]
 const DEFAULT_DEVICE_OWNER_LABELS = {
     owner_uid: "unknown",
     owner_email: "unknown",
@@ -81,6 +124,353 @@ function parseBoolean(value, fallback = false) {
     return ["1", "true", "yes", "on"].includes(String(value).toLowerCase())
 }
 
+function normalizeKalshiBaseUrl(value) {
+    const normalized = String(value || "").trim().replace(/\/+$/, "")
+    return normalized || DEFAULT_KALSHI_BASE_URL
+}
+
+function getKalshiConfig() {
+    const environment = String(
+        process.env.KALSHI_ENVIRONMENT || process.env.KALSHI_ENV || "production"
+    ).trim().toLowerCase()
+    const configuredBaseUrl = String(process.env.KALSHI_API_BASE_URL || "").trim()
+    const baseUrl = normalizeKalshiBaseUrl(
+        configuredBaseUrl
+        || (environment === "demo" || environment === "sandbox"
+            ? DEFAULT_KALSHI_DEMO_BASE_URL
+            : DEFAULT_KALSHI_BASE_URL)
+    )
+    const privateKeyPem = process.env.KALSHI_PRIVATE_KEY_PEM
+        ? String(process.env.KALSHI_PRIVATE_KEY_PEM).replace(/\\n/g, "\n")
+        : ""
+    const privateKeyBase64 = String(
+        process.env.KALSHI_PRIVATE_KEY_PEM_BASE64
+        || process.env.KALSHI_PRIVATE_KEY_BASE64
+        || ""
+    ).trim()
+    const privateKeyPath = String(process.env.KALSHI_PRIVATE_KEY_PATH || "").trim()
+    const apiKeyId = String(
+        process.env.KALSHI_API_KEY_ID
+        || process.env.KALSHI_ACCESS_KEY
+        || ""
+    ).trim()
+    const rawTimeoutMs = Number(process.env.KALSHI_API_TIMEOUT_MS || 10000)
+    const privateKeySource = privateKeyPem
+        ? "env"
+        : privateKeyBase64
+            ? "base64_env"
+            : privateKeyPath
+                ? "file"
+                : "none"
+
+    return {
+        environment,
+        baseUrl,
+        apiKeyId,
+        privateKeyPem,
+        privateKeyBase64,
+        privateKeyPath,
+        privateKeySource,
+        timeoutMs: Number.isFinite(rawTimeoutMs) && rawTimeoutMs > 0 ? rawTimeoutMs : 10000,
+        authConfigured: Boolean(apiKeyId && (privateKeyPem || privateKeyBase64 || privateKeyPath)),
+    }
+}
+
+function getPublicKalshiConfig(config = getKalshiConfig()) {
+    return {
+        environment: config.environment,
+        baseUrl: config.baseUrl,
+        timeoutMs: config.timeoutMs,
+        authConfigured: config.authConfigured,
+        hasApiKeyId: Boolean(config.apiKeyId),
+        hasPrivateKey: config.privateKeySource !== "none",
+        privateKeySource: config.privateKeySource,
+    }
+}
+
+function loadKalshiPrivateKey(config) {
+    if (config.privateKeyPem) {
+        return config.privateKeyPem
+    }
+
+    if (config.privateKeyBase64) {
+        return Buffer.from(config.privateKeyBase64, "base64").toString("utf8")
+    }
+
+    if (config.privateKeyPath) {
+        const keyPath = path.isAbsolute(config.privateKeyPath)
+            ? config.privateKeyPath
+            : path.resolve(process.cwd(), config.privateKeyPath)
+        return fs.readFileSync(keyPath, "utf8")
+    }
+
+    return ""
+}
+
+function createKalshiSignature(privateKey, timestamp, method, requestPath) {
+    const pathWithoutQuery = String(requestPath || "").split("?")[0]
+    const signer = crypto.createSign("RSA-SHA256")
+    signer.update(`${timestamp}${String(method || "GET").toUpperCase()}${pathWithoutQuery}`)
+    signer.end()
+
+    return signer.sign({
+        key: privateKey,
+        padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+        saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST,
+    }).toString("base64")
+}
+
+function buildKalshiAuthHeaders(config, method, requestPath) {
+    if (!config.authConfigured) {
+        throw new Error(
+            "Kalshi auth is not configured. Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH or KALSHI_PRIVATE_KEY_PEM."
+        )
+    }
+
+    const timestamp = String(Date.now())
+    const privateKey = loadKalshiPrivateKey(config)
+    const signature = createKalshiSignature(privateKey, timestamp, method, requestPath)
+
+    return {
+        "KALSHI-ACCESS-KEY": config.apiKeyId,
+        "KALSHI-ACCESS-SIGNATURE": signature,
+        "KALSHI-ACCESS-TIMESTAMP": timestamp,
+    }
+}
+
+function pickKalshiQueryParams(query, allowedKeys) {
+    return allowedKeys.reduce((params, key) => {
+        const value = query?.[key]
+
+        if (value !== undefined && value !== "") {
+            params[key] = value
+        }
+
+        return params
+    }, {})
+}
+
+function buildKalshiPath(...segments) {
+    return `/${segments
+        .map((segment) => String(segment || "").trim().replace(/^\/+|\/+$/g, ""))
+        .filter(Boolean)
+        .map((segment) => encodeURIComponent(segment))
+        .join("/")}`
+}
+
+function normalizeKalshiCategory(value) {
+    return String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/&/g, " and ")
+        .replace(/\s+/g, " ")
+}
+
+function normalizeKalshiStatus(value) {
+    const normalized = String(value || "").trim().toLowerCase()
+
+    if (normalized === "active") {
+        return "open"
+    }
+
+    return normalized
+}
+
+function matchesKalshiMarketStatus(market, requestedStatus) {
+    const normalizedRequestedStatus = normalizeKalshiStatus(requestedStatus)
+
+    if (!normalizedRequestedStatus) {
+        return true
+    }
+
+    const normalizedMarketStatus = normalizeKalshiStatus(market?.status)
+
+    if (normalizedRequestedStatus === "open") {
+        return normalizedMarketStatus === "open" || normalizedMarketStatus === "active"
+    }
+
+    return normalizedMarketStatus === normalizedRequestedStatus
+}
+
+function extractKalshiEventMarkets(events, requestedStatus = "") {
+    const seenTickers = new Set()
+
+    return (Array.isArray(events) ? events : []).flatMap((event) => {
+        const nestedMarkets = Array.isArray(event?.markets) ? event.markets : []
+
+        return nestedMarkets
+            .filter((market) => market?.ticker && !seenTickers.has(market.ticker))
+            .filter((market) => matchesKalshiMarketStatus(market, requestedStatus))
+            .map((market) => {
+                seenTickers.add(market.ticker)
+
+                return {
+                    ...market,
+                    category: market?.category || event?.category,
+                    event_ticker: market?.event_ticker || event?.event_ticker,
+                    series_ticker: market?.series_ticker || event?.series_ticker,
+                }
+            })
+    })
+}
+
+function formatKalshiError(error) {
+    const status = Number(error?.response?.status)
+    const responseBody = error?.response?.data
+    const detail = responseBody
+        ? (typeof responseBody === "string" ? responseBody : JSON.stringify(responseBody))
+        : error.message
+    const isMissingAuth = String(error?.message || "").includes("Kalshi auth is not configured")
+
+    return {
+        statusCode: isMissingAuth
+            ? 503
+            : Number.isFinite(status) && status >= 400
+                ? status
+                : 500,
+        detail,
+    }
+}
+
+function parseKalshiPriceToCents(value) {
+    const numericValue = Number(value)
+
+    if (!Number.isFinite(numericValue)) {
+        return null
+    }
+
+    if (numericValue > 0 && numericValue < 1) {
+        return clamp(Math.round(numericValue * 100), 1, 99)
+    }
+
+    if (numericValue >= 1 && numericValue <= 99) {
+        return clamp(Math.round(numericValue), 1, 99)
+    }
+
+    return null
+}
+
+function readKalshiMarketPriceCents(marketDetail, centsField, dollarsField) {
+    const candidates = [
+        marketDetail?.[centsField],
+        marketDetail?.[dollarsField],
+    ]
+
+    for (const candidate of candidates) {
+        const parsed = parseKalshiPriceToCents(candidate)
+
+        if (Number.isFinite(parsed)) {
+            return parsed
+        }
+    }
+
+    return null
+}
+
+function formatKalshiPriceDollars(priceCents) {
+    if (!Number.isFinite(Number(priceCents))) {
+        return null
+    }
+
+    return (Number(priceCents) / 100).toFixed(4)
+}
+
+function extractKalshiMarket(payload) {
+    if (!payload || typeof payload !== "object") {
+        return null
+    }
+
+    return payload.market || payload
+}
+
+function extractKalshiOrderbook(payload) {
+    const book = payload?.orderbook_fp || payload?.orderbook || payload || {}
+
+    return {
+        yes: Array.isArray(book.yes_dollars)
+            ? book.yes_dollars
+            : Array.isArray(book.yes)
+                ? book.yes
+                : [],
+        no: Array.isArray(book.no_dollars)
+            ? book.no_dollars
+            : Array.isArray(book.no)
+                ? book.no
+                : [],
+    }
+}
+
+function getWeakestMetric(metricScores = {}) {
+    return Object.entries(metricScores).reduce((lowest, [metricType, score]) => {
+        const numericScore = Number(score)
+
+        if (!Number.isFinite(numericScore)) {
+            return lowest
+        }
+
+        if (!lowest || numericScore < lowest.score) {
+            return { metricType, score: numericScore }
+        }
+
+        return lowest
+    }, null)
+}
+
+function buildEsgTradeSignal(esgScore) {
+    const overall = Number(esgScore?.overall)
+
+    if (!Number.isFinite(overall)) {
+        throw new Error("No ESG score is available yet. Ingest ESG samples before requesting a trade plan.")
+    }
+
+    const weakestMetric = getWeakestMetric(esgScore?.metricScores || {})
+    let side = "yes"
+    let count = 1
+    let confidence = "watch"
+    let outlook = "balanced"
+
+    if (overall >= 85) {
+        side = "yes"
+        count = 3
+        confidence = "high"
+        outlook = "positive"
+    } else if (overall >= 70) {
+        side = "yes"
+        count = 2
+        confidence = "moderate"
+        outlook = "positive"
+    } else if (overall >= 55) {
+        side = "no"
+        count = 1
+        confidence = "moderate"
+        outlook = "defensive"
+    } else {
+        side = "no"
+        count = 3
+        confidence = "high"
+        outlook = "defensive"
+    }
+
+    const weakestMetricText = weakestMetric
+        ? `${weakestMetric.metricType} (${weakestMetric.score.toFixed(2)})`
+        : "no metric breakdown"
+    const rationale = side === "yes"
+        ? `Overall ESG score ${overall.toFixed(2)} supports a YES bias. Weakest metric: ${weakestMetricText}.`
+        : `Overall ESG score ${overall.toFixed(2)} is weak enough to hedge with NO. Weakest metric: ${weakestMetricText}.`
+
+    return {
+        overall: Number(overall.toFixed(2)),
+        side,
+        action: "buy",
+        count,
+        confidence,
+        outlook,
+        weakestMetric: weakestMetric?.metricType || null,
+        weakestMetricScore: weakestMetric ? Number(weakestMetric.score.toFixed(2)) : null,
+        rationale,
+    }
+}
+
 function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max)
 }
@@ -98,6 +488,109 @@ function getByPath(payload, dotPath) {
 
 function createRandomValueWithGenerator(min, max, randomFn) {
     return Number((randomFn() * (max - min) + min).toFixed(2))
+}
+
+function getExportWindow(range) {
+    const selectedWindow = EXPORT_WINDOWS[String(range || "").toLowerCase()]
+
+    if (!selectedWindow) {
+        return null
+    }
+
+    return {
+        ...selectedWindow,
+        sinceMs: Date.now() - selectedWindow.days * 24 * 60 * 60 * 1000,
+    }
+}
+
+function escapeCsvValue(value) {
+    if (value === null || value === undefined) {
+        return ""
+    }
+
+    const stringValue =
+        typeof value === "string" ? value : JSON.stringify(value) ?? String(value)
+
+    if (/[",\n]/.test(stringValue)) {
+        return `"${stringValue.replace(/"/g, '""')}"`
+    }
+
+    return stringValue
+}
+
+function buildSensorReadingsCsv(rows) {
+    const headers = [
+        "id",
+        "sensor_id",
+        "metric_type",
+        "value",
+        "recorded_at",
+        "created_at",
+        "source",
+        "owner_uid",
+        "owner_email",
+        "device_name",
+    ]
+    const lines = rows.map((row) =>
+        headers.map((header) => escapeCsvValue(row?.[header])).join(",")
+    )
+
+    return [headers.join(","), ...lines].join("\n")
+}
+
+function generateFallbackSensorReadings(range) {
+    const selectedWindow = getExportWindow(range) || EXPORT_WINDOWS.day
+    const sensorIds = ["sensor1", "sensor2", "sensor3"]
+    const baseIntervalsPerDay = 12 * 60 * 12
+    const intervalCount = baseIntervalsPerDay * selectedWindow.days
+    const intervalMs = 5 * 1000
+    const baseTime = Date.now()
+    const rows = []
+
+    for (let intervalIndex = 0; intervalIndex < intervalCount; intervalIndex += 1) {
+        const recordedAt = new Date(baseTime - intervalIndex * intervalMs).toISOString()
+
+        sensorIds.forEach((sensorId, sensorIndex) => {
+            METRIC_TYPES.forEach((metricType, metricIndex) => {
+                const baseValueByMetric = {
+                    air_quality: 37,
+                    no2: 14,
+                    temperature: 22.4,
+                    humidity: 51.4,
+                    noise_levels: 43,
+                }
+                const metricTrend = {
+                    air_quality: 0.018,
+                    no2: 0.011,
+                    temperature: 0.009,
+                    humidity: 0.014,
+                    noise_levels: 0.016,
+                }
+                const oscillation = Math.sin((intervalIndex + 1 + sensorIndex) / (6 + metricIndex)) * 1.7
+                const value = Number(
+                    (
+                        baseValueByMetric[metricType]
+                        + intervalIndex * metricTrend[metricType]
+                        + metricIndex * 0.75
+                        + sensorIndex * 1.35
+                        + oscillation
+                    ).toFixed(2)
+                )
+
+                rows.push({
+                    id: `fallback-${selectedWindow.label}-${sensorId}-${metricType}-${intervalIndex + 1}`,
+                    sensor_id: sensorId,
+                    metric_type: metricType,
+                    value,
+                    recorded_at: recordedAt,
+                    created_at: recordedAt,
+                    source: "fallback",
+                })
+            })
+        })
+    }
+
+    return rows.sort((left, right) => right.recorded_at.localeCompare(left.recorded_at))
 }
 
 function hashSeed(input) {
@@ -299,6 +792,7 @@ function normalizeDeviceOwnerLabels(metadata = {}) {
 function createApp(options = {}) {
     const firebaseDb = options.firebaseDb === undefined ? db : options.firebaseDb
     const supabase = options.supabase === undefined ? createSupabaseFromEnv() : options.supabase
+    const kalshiHttpClient = options.kalshiHttpClient || axios
     const app = express()
     const registry = new promClient.Registry()
     const state = {
@@ -715,6 +1209,109 @@ function createApp(options = {}) {
         }
     }
 
+    function normalizeSampleTimestamp(value) {
+        return Number.isFinite(Number(value))
+            ? Math.trunc(Number(value))
+            : Date.now()
+    }
+
+    function buildAcceptedSample(source, sample) {
+        const sensorId = String(sample.sensor_id)
+        const metricType = String(sample.metric_type).toLowerCase()
+        const numericValue = Number(sample.value)
+        const timestamp = normalizeSampleTimestamp(sample.timestamp)
+        const ownerLabels = normalizeDeviceOwnerLabels(sample)
+        const anomaly = evaluateAnomaly(metricType, numericValue)
+
+        return {
+            sensor_id: sensorId,
+            metric_type: metricType,
+            value: numericValue,
+            source,
+            timestamp,
+            ...ownerLabels,
+            esg_score: computeSampleEsgScore({
+                detected: anomaly.isAnomaly,
+                severity: anomaly.severity,
+                score: anomaly.score,
+            }),
+            anomaly: {
+                detected: anomaly.isAnomaly,
+                severity: anomaly.severity,
+                score: anomaly.score,
+                threshold: anomaly.threshold,
+            },
+        }
+    }
+
+    function publishAcceptedSampleMetrics(sample) {
+        const sensorId = String(sample.sensor_id)
+        const metricType = String(sample.metric_type).toLowerCase()
+        const numericValue = Number(sample.value)
+        const timestamp = normalizeSampleTimestamp(sample.timestamp)
+        const ownerLabels = normalizeDeviceOwnerLabels(sample)
+        const anomaly = sample.anomaly || { detected: false, severity: "normal", score: 0 }
+
+        sensorDataMetric.set(
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+            },
+            numericValue
+        )
+        sensorDataAnomalyScoreMetric.set(
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+            },
+            anomaly.score
+        )
+        sensorDataLastTimestampMetric.set(
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+            },
+            timestamp
+        )
+
+        sensorDataAnomalyFlagMetric.set(
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+                severity: "warning",
+            },
+            anomaly.detected && anomaly.severity === "warning" ? 1 : 0
+        )
+        sensorDataAnomalyFlagMetric.set(
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+                severity: "critical",
+            },
+            anomaly.detected && anomaly.severity === "critical" ? 1 : 0
+        )
+
+        if (anomaly.detected) {
+            sensorDataAnomalyTotalMetric.inc({
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+                severity: anomaly.severity,
+            })
+        }
+    }
+
     function computeSampleEsgScore(anomaly) {
         if (!anomaly?.detected) {
             return 100
@@ -1013,94 +1610,77 @@ function createApp(options = {}) {
         return metadataBySensorId
     }
 
-    function createIngestionResult(source, sample) {
-        const sensorId = String(sample.sensor_id)
-        const metricType = String(sample.metric_type).toLowerCase()
-        const numericValue = Number(sample.value)
-        const timestamp = Number.isFinite(Number(sample.timestamp))
-            ? Math.trunc(Number(sample.timestamp))
-            : Date.now()
-        const ownerLabels = normalizeDeviceOwnerLabels(sample)
-        const anomaly = evaluateAnomaly(metricType, numericValue)
-
-        sensorDataMetric.set(
-            {
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-            },
-            numericValue
-        )
-        sensorDataAnomalyScoreMetric.set(
-            {
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-            },
-            anomaly.score
-        )
-        sensorDataLastTimestampMetric.set(
-            {
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-            },
-            timestamp
-        )
-
-        sensorDataAnomalyFlagMetric.set(
-            {
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-                severity: "warning",
-            },
-            anomaly.isAnomaly && anomaly.severity === "warning" ? 1 : 0
-        )
-        sensorDataAnomalyFlagMetric.set(
-            {
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-                severity: "critical",
-            },
-            anomaly.isAnomaly && anomaly.severity === "critical" ? 1 : 0
-        )
-
-        if (anomaly.isAnomaly) {
-            sensorDataAnomalyTotalMetric.inc({
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-                severity: anomaly.severity,
-            })
+    async function persistAcceptedSamples(samples) {
+        if (!supabase || samples.length === 0) {
+            return { stored: 0, skipped: true, reason: "missing_supabase" }
         }
 
-        return {
-            sensor_id: sensorId,
-            metric_type: metricType,
-            value: numericValue,
-            source,
-            timestamp,
-            ...ownerLabels,
-            esg_score: computeSampleEsgScore({
-                detected: anomaly.isAnomaly,
-                severity: anomaly.severity,
-                score: anomaly.score,
-            }),
-            anomaly: {
-                detected: anomaly.isAnomaly,
-                severity: anomaly.severity,
-                score: anomaly.score,
-                threshold: anomaly.threshold,
-            },
+        const rows = samples.map((sample) => ({
+            sensor_id: sample.sensor_id,
+            metric_type: sample.metric_type,
+            value: sample.value,
+            recorded_at: new Date(normalizeSampleTimestamp(sample.timestamp)).toISOString(),
+        }))
+
+        const { error } = await supabase
+            .from("sensor_readings")
+            .insert(rows)
+
+        if (error) {
+            throw new Error(error.message)
         }
+
+        return { stored: rows.length, skipped: false }
+    }
+
+    async function hydrateEsgStateFromStoredReadings() {
+        const config = getEsgConfig()
+
+        if (state.sampleBuffer.length > 0 && Number.isFinite(Number(state.lastEsgScore?.overall))) {
+            return state.lastEsgScore
+        }
+
+        if (!supabase) {
+            return state.lastEsgScore
+        }
+
+        const { data, error } = await supabase
+            .from("sensor_readings")
+            .select("sensor_id, metric_type, value, recorded_at")
+            .gte("recorded_at", new Date(Date.now() - config.windowMs).toISOString())
+            .order("recorded_at", { ascending: false })
+
+        if (error) {
+            throw new Error(error.message)
+        }
+
+        const recoveredSamples = (data || [])
+            .map((row) => buildAcceptedSample("supabase-recovery", {
+                sensor_id: row.sensor_id,
+                metric_type: row.metric_type,
+                value: row.value,
+                timestamp: Date.parse(row.recorded_at),
+            }))
+            .filter((sample) => Number.isFinite(Number(sample.timestamp)))
+            .sort((left, right) => Number(left.timestamp) - Number(right.timestamp))
+
+        if (recoveredSamples.length === 0) {
+            return state.lastEsgScore
+        }
+
+        state.sampleBuffer = []
+        state.latestSeries = {}
+        updateEsgState(recoveredSamples.slice(-config.bufferSize))
+
+        return state.lastEsgScore
+    }
+
+    async function resolveCurrentEsgScore() {
+        if (Number.isFinite(Number(state.lastEsgScore?.overall))) {
+            return state.lastEsgScore
+        }
+
+        return hydrateEsgStateFromStoredReadings()
     }
 
     async function ingestSamples(samples, source) {
@@ -1130,23 +1710,131 @@ function createApp(options = {}) {
                 return
             }
 
-            accepted.push(createIngestionResult(source, {
-                    sensor_id: sample.sensor_id,
-                    metric_type: metricType,
-                    value: numericValue,
-                    timestamp: sample.timestamp,
-                    ...ownerMetadata,
-                }))
+            accepted.push(buildAcceptedSample(source, {
+                sensor_id: sample.sensor_id,
+                metric_type: metricType,
+                value: numericValue,
+                timestamp: sample.timestamp,
+                ...ownerMetadata,
+            }))
         })
 
         let pushResult = { pushed: 0, skipped: true, reason: "no_valid_samples" }
 
         if (accepted.length > 0) {
+            accepted.forEach((sample) => {
+                publishAcceptedSampleMetrics(sample)
+            })
             updateEsgState(accepted)
+            try {
+                await persistAcceptedSamples(accepted)
+            } catch (error) {
+                console.warn(`Sensor reading persistence failed: ${error.message}`)
+            }
             pushResult = await pushMetricsToGrafana(buildDynamicTimeSeries(accepted))
         }
 
         return { accepted, rejected, pushResult }
+    }
+
+    function getBufferedSensorReadings(options) {
+        const selectedWindow = getExportWindow(options.range)
+
+        if (!selectedWindow) {
+            throw new Error("range must be one of: day, week, month")
+        }
+
+        const requestedSensorId = String(options.sensor_id || "").trim()
+        const requestedMetricType = String(options.metric_type || "").trim().toLowerCase()
+
+        return state.sampleBuffer
+            .filter((sample) => Number(sample.timestamp) >= selectedWindow.sinceMs)
+            .filter((sample) => !requestedSensorId || sample.sensor_id === requestedSensorId)
+            .filter((sample) => !requestedMetricType || sample.metric_type === requestedMetricType)
+            .sort((left, right) => Number(right.timestamp) - Number(left.timestamp))
+            .map((sample, index) => {
+                const recordedAt = new Date(Number(sample.timestamp)).toISOString()
+
+                return {
+                    id: `memory-${sample.sensor_id}-${sample.metric_type}-${sample.timestamp}-${index + 1}`,
+                    sensor_id: sample.sensor_id,
+                    metric_type: sample.metric_type,
+                    value: sample.value,
+                    recorded_at: recordedAt,
+                    created_at: recordedAt,
+                    source: sample.source,
+                    owner_uid: sample.owner_uid,
+                    owner_email: sample.owner_email,
+                    device_name: sample.device_name,
+                }
+            })
+    }
+
+    async function getStoredSensorReadings(options) {
+        const selectedWindow = getExportWindow(options.range)
+
+        if (!selectedWindow || !supabase) {
+            return []
+        }
+
+        let query = supabase
+            .from("sensor_readings")
+            .select("id, sensor_id, metric_type, value, recorded_at, created_at")
+            .gte("recorded_at", new Date(selectedWindow.sinceMs).toISOString())
+            .order("recorded_at", { ascending: false })
+
+        if (options.sensor_id) {
+            query = query.eq("sensor_id", options.sensor_id)
+        }
+
+        if (options.metric_type) {
+            query = query.eq("metric_type", options.metric_type)
+        }
+
+        const { data, error } = await query
+
+        if (error) {
+            throw new Error(error.message)
+        }
+
+        return (data || []).map((row) => ({
+            ...row,
+            source: row.source,
+            owner_uid: row.owner_uid,
+            owner_email: row.owner_email,
+            device_name: row.device_name,
+        }))
+    }
+
+    async function exportSensorReadingsCsv(options) {
+        const selectedWindow = getExportWindow(options.range)
+
+        if (!selectedWindow) {
+            throw new Error("range must be one of: day, week, month")
+        }
+
+        let rows = []
+
+        if (supabase) {
+            try {
+                rows = await getStoredSensorReadings(options)
+            } catch (error) {
+                console.warn(`Export DB lookup failed for ${options.range}: ${error.message}`)
+            }
+        }
+
+        if (rows.length === 0) {
+            rows = getBufferedSensorReadings(options)
+        }
+
+        if (rows.length === 0) {
+            rows = generateFallbackSensorReadings(options.range)
+        }
+
+        return {
+            csv: buildSensorReadingsCsv(rows),
+            fileName: `sensor-readings-${selectedWindow.label}.csv`,
+        }
     }
 
     function getMwbeConfig() {
@@ -1165,6 +1853,198 @@ function createApp(options = {}) {
             syncIntervalMs: Number(process.env.MWBE_SYNC_INTERVAL_MS || 60000),
             syncOnStart: parseBoolean(process.env.MWBE_SYNC_ON_START, false),
             ...runtimeOverrides.mwbeConfig,
+        }
+    }
+
+    async function callKalshiApi({
+        endpointPath,
+        method = "GET",
+        params = {},
+        authRequired = false,
+        data = undefined,
+        headers: customHeaders = {},
+    }) {
+        const config = getKalshiConfig()
+        const normalizedEndpointPath = String(endpointPath || "").startsWith("/")
+            ? String(endpointPath)
+            : `/${endpointPath}`
+        const url = new URL(`${config.baseUrl}${normalizedEndpointPath}`)
+        const headers = { ...customHeaders }
+
+        if (authRequired || parseBoolean(process.env.KALSHI_SIGN_PUBLIC_REQUESTS, false)) {
+            Object.assign(headers, buildKalshiAuthHeaders(config, method, url.pathname))
+        }
+
+        const response = await kalshiHttpClient({
+            method,
+            url: url.toString(),
+            params,
+            data,
+            headers,
+            timeout: config.timeoutMs,
+            validateStatus: (status) => status >= 200 && status < 300,
+        })
+
+        return response.data
+    }
+
+    async function loadCategoryFilteredKalshiMarkets(query) {
+        const requestedCategory = normalizeKalshiCategory(query?.category)
+        const requestedStatus = String(query?.status || "").trim()
+        const requestedLimit = clamp(Number.parseInt(String(query?.limit || "100"), 10) || 100, 1, 1000)
+        const requestedCursor = String(query?.cursor || "").trim()
+        const maxPages = 5
+        let nextCursor = requestedCursor
+        let pageCount = 0
+        let hasMore = false
+        const collectedMarkets = []
+
+        while (pageCount < maxPages && collectedMarkets.length < requestedLimit) {
+            const params = {
+                ...pickKalshiQueryParams(query, KALSHI_EVENTS_QUERY_PARAMS),
+                limit: "200",
+                with_nested_markets: "true",
+            }
+
+            if (requestedStatus) {
+                params.status = normalizeKalshiStatus(requestedStatus)
+            }
+
+            if (nextCursor) {
+                params.cursor = nextCursor
+            } else {
+                delete params.cursor
+            }
+
+            const data = await callKalshiApi({
+                endpointPath: "/events",
+                params,
+            })
+
+            const events = Array.isArray(data?.events) ? data.events : []
+            const matchingEvents = events.filter((event) => (
+                !requestedCategory || normalizeKalshiCategory(event?.category) === requestedCategory
+            ))
+
+            collectedMarkets.push(...extractKalshiEventMarkets(matchingEvents, requestedStatus))
+
+            nextCursor = String(data?.cursor || "").trim()
+            hasMore = Boolean(nextCursor)
+            pageCount += 1
+
+            if (!hasMore || events.length === 0) {
+                break
+            }
+        }
+
+        return {
+            markets: collectedMarkets.slice(0, requestedLimit),
+            cursor: hasMore && collectedMarkets.length >= requestedLimit ? nextCursor : "",
+        }
+    }
+
+    function resolveKalshiLimitPriceCents(marketDetail, orderbook, side) {
+        const lastPrice = readKalshiMarketPriceCents(marketDetail, "last_price", "last_price_dollars")
+        const sideLevels = side === "yes" ? orderbook?.yes : orderbook?.no
+        const topLevelPrice = Array.isArray(sideLevels?.[0])
+            ? parseKalshiPriceToCents(sideLevels[0][0])
+            : null
+        const fallbackNoFromLast = Number.isFinite(lastPrice) ? 100 - lastPrice : null
+        const candidates = side === "yes"
+            ? [
+                readKalshiMarketPriceCents(marketDetail, "yes_ask", "yes_ask_dollars"),
+                readKalshiMarketPriceCents(marketDetail, "yes_price", "yes_price_dollars"),
+                topLevelPrice,
+                lastPrice,
+            ]
+            : [
+                readKalshiMarketPriceCents(marketDetail, "no_ask", "no_ask_dollars"),
+                readKalshiMarketPriceCents(marketDetail, "no_price", "no_price_dollars"),
+                topLevelPrice,
+                fallbackNoFromLast,
+            ]
+
+        return candidates.find((candidate) => Number.isFinite(candidate)) ?? 50
+    }
+
+    async function buildEsgTradePlan({ ticker, count, side, action, subaccount } = {}) {
+        const normalizedTicker = String(ticker || "").trim()
+
+        if (!normalizedTicker) {
+            throw new Error("ticker is required to build an ESG trade plan")
+        }
+
+        const esgScore = await resolveCurrentEsgScore()
+        const signal = buildEsgTradeSignal(esgScore)
+        const marketPayload = await callKalshiApi({
+            endpointPath: buildKalshiPath("markets", normalizedTicker),
+        })
+        const orderbookPayload = await callKalshiApi({
+            endpointPath: buildKalshiPath("markets", normalizedTicker, "orderbook"),
+            params: { depth: 10 },
+        })
+        const marketDetail = extractKalshiMarket(marketPayload)
+        const orderbook = extractKalshiOrderbook(orderbookPayload)
+
+        if (!marketDetail) {
+            throw new Error(`Kalshi market ${normalizedTicker} was not found`)
+        }
+
+        const resolvedSide = ["yes", "no"].includes(String(side || "").trim().toLowerCase())
+            ? String(side).trim().toLowerCase()
+            : signal.side
+        const resolvedAction = ["buy", "sell"].includes(String(action || "").trim().toLowerCase())
+            ? String(action).trim().toLowerCase()
+            : signal.action
+        const resolvedCount = Number.isInteger(Number(count)) && Number(count) > 0
+            ? Number(count)
+            : signal.count
+        const limitPriceCents = resolveKalshiLimitPriceCents(marketDetail, orderbook, resolvedSide)
+        const orderPreview = {
+            ticker: normalizedTicker,
+            client_order_id: crypto.randomUUID(),
+            side: resolvedSide,
+            action: resolvedAction,
+            count: resolvedCount,
+            time_in_force: "good_till_canceled",
+            cancel_order_on_pause: true,
+        }
+
+        if (resolvedSide === "yes") {
+            orderPreview.yes_price = limitPriceCents
+        } else {
+            orderPreview.no_price = limitPriceCents
+        }
+
+        if (Number.isInteger(Number(subaccount)) && Number(subaccount) >= 0) {
+            orderPreview.subaccount = Number(subaccount)
+        }
+
+        return {
+            generatedAt: Date.now(),
+            esg: esgScore,
+            signal: {
+                ...signal,
+                side: resolvedSide,
+                action: resolvedAction,
+                count: resolvedCount,
+                limitPriceCents,
+                limitPriceDollars: formatKalshiPriceDollars(limitPriceCents),
+            },
+            market: {
+                ticker: marketDetail.ticker || normalizedTicker,
+                title: marketDetail.title || marketDetail.subtitle || marketDetail.question || normalizedTicker,
+                status: marketDetail.status || null,
+                closeTime: marketDetail.close_time || marketDetail.expiration_time || null,
+                yesAsk: readKalshiMarketPriceCents(marketDetail, "yes_ask", "yes_ask_dollars"),
+                noAsk: readKalshiMarketPriceCents(marketDetail, "no_ask", "no_ask_dollars"),
+                lastPrice: readKalshiMarketPriceCents(marketDetail, "last_price", "last_price_dollars"),
+            },
+            orderbook: {
+                yes: orderbook.yes.slice(0, 6),
+                no: orderbook.no.slice(0, 6),
+            },
+            orderPreview,
         }
     }
 
@@ -1695,6 +2575,33 @@ function createApp(options = {}) {
         res.send(await registry.metrics())
     })
 
+    app.get("/iot/export/:range", async (req, res) => {
+        try {
+            const metricType = String(req.query.metric_type || "").trim().toLowerCase()
+
+            if (metricType && !METRIC_TYPES.includes(metricType)) {
+                res.status(400).json({
+                    error: `metric_type must be one of: ${METRIC_TYPES.join(", ")}`,
+                })
+                return
+            }
+
+            const { csv, fileName } = await exportSensorReadingsCsv({
+                range: req.params.range,
+                sensor_id: String(req.query.sensor_id || "").trim(),
+                metric_type: metricType || undefined,
+            })
+
+            res.setHeader("Content-Type", "text/csv; charset=utf-8")
+            res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`)
+            res.status(200).send(csv)
+        } catch (error) {
+            const statusCode = String(error.message || "").includes("range must be one of") ? 400 : 500
+            console.error(error.message)
+            res.status(statusCode).json({ error: error.message })
+        }
+    })
+
     app.get("/firebase/status", async (req, res) => {
         res.json({
             config: getFirebaseConfig(),
@@ -1791,11 +2698,18 @@ function createApp(options = {}) {
     })
 
     app.get("/esg/status", async (req, res) => {
-        res.json({
-            config: getEsgConfig(),
-            latest: state.lastEsgScore,
-            bufferedSamples: state.sampleBuffer.length,
-        })
+        try {
+            const latestScore = await resolveCurrentEsgScore()
+
+            res.json({
+                config: getEsgConfig(),
+                latest: latestScore,
+                bufferedSamples: state.sampleBuffer.length,
+            })
+        } catch (error) {
+            console.error(`ESG status recovery failed: ${error.message}`)
+            res.status(500).json({ error: "Failed to load ESG status", detail: error.message })
+        }
     })
 
     app.get("/mwbe/status", async (req, res) => {
@@ -1805,6 +2719,179 @@ function createApp(options = {}) {
             lastMwbeError: state.lastMwbeError,
             thresholds: resolveThresholds(),
         })
+    })
+
+    app.get("/kalshi/status", async (req, res) => {
+        res.json({
+            config: getPublicKalshiConfig(),
+            routes: {
+                markets: "GET /kalshi/markets?category=Companies&status=open",
+                market: "GET /kalshi/markets/:ticker",
+                orderbook: "GET /kalshi/markets/:ticker/orderbook",
+                balance: "GET /kalshi/portfolio/balance",
+                positions: "GET /kalshi/portfolio/positions",
+                orders: "GET /kalshi/portfolio/orders",
+                esgTradePlan: "GET /kalshi/esg/trade-plan?ticker=MARKET_TICKER",
+                esgTradeOrder: "POST /kalshi/esg/trade-order",
+            },
+        })
+    })
+
+    app.get("/kalshi/markets", async (req, res) => {
+        try {
+            const requestedCategory = String(req.query?.category || "").trim()
+            const data = requestedCategory
+                ? await loadCategoryFilteredKalshiMarkets(req.query)
+                : await callKalshiApi({
+                    endpointPath: "/markets",
+                    params: pickKalshiQueryParams(req.query, KALSHI_MARKETS_QUERY_PARAMS),
+                })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi markets fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi markets", detail })
+        }
+    })
+
+    app.get("/kalshi/markets/:ticker", async (req, res) => {
+        try {
+            const data = await callKalshiApi({
+                endpointPath: buildKalshiPath("markets", req.params.ticker),
+            })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi market fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi market", detail })
+        }
+    })
+
+    app.get("/kalshi/markets/:ticker/orderbook", async (req, res) => {
+        try {
+            const data = await callKalshiApi({
+                endpointPath: buildKalshiPath("markets", req.params.ticker, "orderbook"),
+                params: pickKalshiQueryParams(req.query, KALSHI_ORDERBOOK_QUERY_PARAMS),
+            })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi orderbook fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi orderbook", detail })
+        }
+    })
+
+    app.get("/kalshi/portfolio/balance", async (req, res) => {
+        try {
+            const data = await callKalshiApi({
+                endpointPath: "/portfolio/balance",
+                params: pickKalshiQueryParams(req.query, ["subaccount"]),
+                authRequired: true,
+            })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi balance fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi balance", detail })
+        }
+    })
+
+    app.get("/kalshi/portfolio/positions", async (req, res) => {
+        try {
+            const data = await callKalshiApi({
+                endpointPath: "/portfolio/positions",
+                params: pickKalshiQueryParams(req.query, KALSHI_PORTFOLIO_QUERY_PARAMS),
+                authRequired: true,
+            })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi positions fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi positions", detail })
+        }
+    })
+
+    app.get("/kalshi/portfolio/orders", async (req, res) => {
+        try {
+            const data = await callKalshiApi({
+                endpointPath: "/portfolio/orders",
+                params: pickKalshiQueryParams(req.query, KALSHI_PORTFOLIO_QUERY_PARAMS),
+                authRequired: true,
+            })
+
+            res.json(data)
+        } catch (error) {
+            const { statusCode, detail } = formatKalshiError(error)
+            console.error(`Kalshi orders fetch failed: ${detail}`)
+            res.status(statusCode).json({ error: "Failed to fetch Kalshi orders", detail })
+        }
+    })
+
+    app.get("/kalshi/esg/trade-plan", async (req, res) => {
+        try {
+            const plan = await buildEsgTradePlan({
+                ticker: req.query.ticker,
+                count: req.query.count,
+                side: req.query.side,
+                action: req.query.action,
+                subaccount: req.query.subaccount,
+            })
+
+            res.json(plan)
+        } catch (error) {
+            const missingEsg = String(error.message || "").includes("No ESG score is available yet")
+            const statusCode = missingEsg || String(error.message || "").includes("ticker is required") ? 400 : 500
+
+            if (statusCode === 500) {
+                console.error(`Kalshi ESG trade plan failed: ${error.message}`)
+            }
+
+            res.status(statusCode).json({ error: "Failed to build ESG trade plan", detail: error.message })
+        }
+    })
+
+    app.post("/kalshi/esg/trade-order", async (req, res) => {
+        try {
+            const payload = req.body || {}
+            const plan = await buildEsgTradePlan({
+                ticker: payload.ticker ?? req.query.ticker,
+                count: payload.count ?? req.query.count,
+                side: payload.side ?? req.query.side,
+                action: payload.action ?? req.query.action,
+                subaccount: payload.subaccount ?? req.query.subaccount,
+            })
+            const orderResult = await callKalshiApi({
+                endpointPath: "/portfolio/orders",
+                method: "POST",
+                authRequired: true,
+                data: plan.orderPreview,
+                headers: {
+                    "Content-Type": "application/json",
+                },
+            })
+
+            res.status(201).json({
+                status: "success",
+                plan,
+                order: orderResult,
+            })
+        } catch (error) {
+            const missingEsg = String(error.message || "").includes("No ESG score is available yet")
+            const missingTicker = String(error.message || "").includes("ticker is required")
+            const { statusCode, detail } = formatKalshiError(error)
+            const resolvedStatusCode = missingEsg || missingTicker ? 400 : statusCode
+
+            if (resolvedStatusCode >= 500) {
+                console.error(`Kalshi ESG trade order failed: ${detail}`)
+            }
+
+            res.status(resolvedStatusCode).json({ error: "Failed to submit ESG trade order", detail })
+        }
     })
 
     app.put("/mwbe/config", async (req, res) => {
@@ -2021,6 +3108,8 @@ function createApp(options = {}) {
         helpers: {
             getEsgConfig,
             getFirebaseConfig,
+            getKalshiConfig,
+            buildEsgTradePlan,
             resolveThresholds,
             evaluateAnomaly,
             ingestSamples,
@@ -2067,12 +3156,20 @@ function startServer(options = {}) {
 }
 
 module.exports = {
+    DEFAULT_KALSHI_BASE_URL,
+    DEFAULT_KALSHI_DEMO_BASE_URL,
     DEFAULT_FIREBASE_DATABASE_URL,
     DEFAULT_FIREBASE_PROJECT_ID,
     DEFAULT_FIREBASE_DEVICE_ROOT_PATH,
     METRIC_TYPES,
+    buildSensorReadingsCsv,
+    createKalshiSignature,
     normalizeFirebaseDevicePayload,
     normalizeFirebaseTimestamp,
+    generateFallbackSensorReadings,
+    getKalshiConfig,
+    getPublicKalshiConfig,
+    getExportWindow,
     createApp,
     startServer,
 }
