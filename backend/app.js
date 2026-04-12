@@ -56,6 +56,12 @@ const KALSHI_MARKETS_QUERY_PARAMS = [
     "tickers",
     "mve_filter",
 ]
+const KALSHI_EVENTS_QUERY_PARAMS = [
+    "cursor",
+    "series_ticker",
+    "min_close_ts",
+    "min_updated_ts",
+]
 const KALSHI_PORTFOLIO_QUERY_PARAMS = [
     "cursor",
     "limit",
@@ -249,6 +255,62 @@ function buildKalshiPath(...segments) {
         .filter(Boolean)
         .map((segment) => encodeURIComponent(segment))
         .join("/")}`
+}
+
+function normalizeKalshiCategory(value) {
+    return String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/&/g, " and ")
+        .replace(/\s+/g, " ")
+}
+
+function normalizeKalshiStatus(value) {
+    const normalized = String(value || "").trim().toLowerCase()
+
+    if (normalized === "active") {
+        return "open"
+    }
+
+    return normalized
+}
+
+function matchesKalshiMarketStatus(market, requestedStatus) {
+    const normalizedRequestedStatus = normalizeKalshiStatus(requestedStatus)
+
+    if (!normalizedRequestedStatus) {
+        return true
+    }
+
+    const normalizedMarketStatus = normalizeKalshiStatus(market?.status)
+
+    if (normalizedRequestedStatus === "open") {
+        return normalizedMarketStatus === "open" || normalizedMarketStatus === "active"
+    }
+
+    return normalizedMarketStatus === normalizedRequestedStatus
+}
+
+function extractKalshiEventMarkets(events, requestedStatus = "") {
+    const seenTickers = new Set()
+
+    return (Array.isArray(events) ? events : []).flatMap((event) => {
+        const nestedMarkets = Array.isArray(event?.markets) ? event.markets : []
+
+        return nestedMarkets
+            .filter((market) => market?.ticker && !seenTickers.has(market.ticker))
+            .filter((market) => matchesKalshiMarketStatus(market, requestedStatus))
+            .map((market) => {
+                seenTickers.add(market.ticker)
+
+                return {
+                    ...market,
+                    category: market?.category || event?.category,
+                    event_ticker: market?.event_ticker || event?.event_ticker,
+                    series_ticker: market?.series_ticker || event?.series_ticker,
+                }
+            })
+    })
 }
 
 function formatKalshiError(error) {
@@ -1012,6 +1074,109 @@ function createApp(options = {}) {
         }
     }
 
+    function normalizeSampleTimestamp(value) {
+        return Number.isFinite(Number(value))
+            ? Math.trunc(Number(value))
+            : Date.now()
+    }
+
+    function buildAcceptedSample(source, sample) {
+        const sensorId = String(sample.sensor_id)
+        const metricType = String(sample.metric_type).toLowerCase()
+        const numericValue = Number(sample.value)
+        const timestamp = normalizeSampleTimestamp(sample.timestamp)
+        const ownerLabels = normalizeDeviceOwnerLabels(sample)
+        const anomaly = evaluateAnomaly(metricType, numericValue)
+
+        return {
+            sensor_id: sensorId,
+            metric_type: metricType,
+            value: numericValue,
+            source,
+            timestamp,
+            ...ownerLabels,
+            esg_score: computeSampleEsgScore({
+                detected: anomaly.isAnomaly,
+                severity: anomaly.severity,
+                score: anomaly.score,
+            }),
+            anomaly: {
+                detected: anomaly.isAnomaly,
+                severity: anomaly.severity,
+                score: anomaly.score,
+                threshold: anomaly.threshold,
+            },
+        }
+    }
+
+    function publishAcceptedSampleMetrics(sample) {
+        const sensorId = String(sample.sensor_id)
+        const metricType = String(sample.metric_type).toLowerCase()
+        const numericValue = Number(sample.value)
+        const timestamp = normalizeSampleTimestamp(sample.timestamp)
+        const ownerLabels = normalizeDeviceOwnerLabels(sample)
+        const anomaly = sample.anomaly || { detected: false, severity: "normal", score: 0 }
+
+        sensorDataMetric.set(
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+            },
+            numericValue
+        )
+        sensorDataAnomalyScoreMetric.set(
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+            },
+            anomaly.score
+        )
+        sensorDataLastTimestampMetric.set(
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+            },
+            timestamp
+        )
+
+        sensorDataAnomalyFlagMetric.set(
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+                severity: "warning",
+            },
+            anomaly.detected && anomaly.severity === "warning" ? 1 : 0
+        )
+        sensorDataAnomalyFlagMetric.set(
+            {
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+                severity: "critical",
+            },
+            anomaly.detected && anomaly.severity === "critical" ? 1 : 0
+        )
+
+        if (anomaly.detected) {
+            sensorDataAnomalyTotalMetric.inc({
+                sensor_id: sensorId,
+                metric_type: metricType,
+                source: sample.source,
+                ...ownerLabels,
+                severity: anomaly.severity,
+            })
+        }
+    }
+
     function computeSampleEsgScore(anomaly) {
         if (!anomaly?.detected) {
             return 100
@@ -1310,94 +1475,77 @@ function createApp(options = {}) {
         return metadataBySensorId
     }
 
-    function createIngestionResult(source, sample) {
-        const sensorId = String(sample.sensor_id)
-        const metricType = String(sample.metric_type).toLowerCase()
-        const numericValue = Number(sample.value)
-        const timestamp = Number.isFinite(Number(sample.timestamp))
-            ? Math.trunc(Number(sample.timestamp))
-            : Date.now()
-        const ownerLabels = normalizeDeviceOwnerLabels(sample)
-        const anomaly = evaluateAnomaly(metricType, numericValue)
-
-        sensorDataMetric.set(
-            {
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-            },
-            numericValue
-        )
-        sensorDataAnomalyScoreMetric.set(
-            {
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-            },
-            anomaly.score
-        )
-        sensorDataLastTimestampMetric.set(
-            {
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-            },
-            timestamp
-        )
-
-        sensorDataAnomalyFlagMetric.set(
-            {
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-                severity: "warning",
-            },
-            anomaly.isAnomaly && anomaly.severity === "warning" ? 1 : 0
-        )
-        sensorDataAnomalyFlagMetric.set(
-            {
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-                severity: "critical",
-            },
-            anomaly.isAnomaly && anomaly.severity === "critical" ? 1 : 0
-        )
-
-        if (anomaly.isAnomaly) {
-            sensorDataAnomalyTotalMetric.inc({
-                sensor_id: sensorId,
-                metric_type: metricType,
-                source,
-                ...ownerLabels,
-                severity: anomaly.severity,
-            })
+    async function persistAcceptedSamples(samples) {
+        if (!supabase || samples.length === 0) {
+            return { stored: 0, skipped: true, reason: "missing_supabase" }
         }
 
-        return {
-            sensor_id: sensorId,
-            metric_type: metricType,
-            value: numericValue,
-            source,
-            timestamp,
-            ...ownerLabels,
-            esg_score: computeSampleEsgScore({
-                detected: anomaly.isAnomaly,
-                severity: anomaly.severity,
-                score: anomaly.score,
-            }),
-            anomaly: {
-                detected: anomaly.isAnomaly,
-                severity: anomaly.severity,
-                score: anomaly.score,
-                threshold: anomaly.threshold,
-            },
+        const rows = samples.map((sample) => ({
+            sensor_id: sample.sensor_id,
+            metric_type: sample.metric_type,
+            value: sample.value,
+            recorded_at: new Date(normalizeSampleTimestamp(sample.timestamp)).toISOString(),
+        }))
+
+        const { error } = await supabase
+            .from("sensor_readings")
+            .insert(rows)
+
+        if (error) {
+            throw new Error(error.message)
         }
+
+        return { stored: rows.length, skipped: false }
+    }
+
+    async function hydrateEsgStateFromStoredReadings() {
+        const config = getEsgConfig()
+
+        if (state.sampleBuffer.length > 0 && Number.isFinite(Number(state.lastEsgScore?.overall))) {
+            return state.lastEsgScore
+        }
+
+        if (!supabase) {
+            return state.lastEsgScore
+        }
+
+        const { data, error } = await supabase
+            .from("sensor_readings")
+            .select("sensor_id, metric_type, value, recorded_at")
+            .gte("recorded_at", new Date(Date.now() - config.windowMs).toISOString())
+            .order("recorded_at", { ascending: false })
+
+        if (error) {
+            throw new Error(error.message)
+        }
+
+        const recoveredSamples = (data || [])
+            .map((row) => buildAcceptedSample("supabase-recovery", {
+                sensor_id: row.sensor_id,
+                metric_type: row.metric_type,
+                value: row.value,
+                timestamp: Date.parse(row.recorded_at),
+            }))
+            .filter((sample) => Number.isFinite(Number(sample.timestamp)))
+            .sort((left, right) => Number(left.timestamp) - Number(right.timestamp))
+
+        if (recoveredSamples.length === 0) {
+            return state.lastEsgScore
+        }
+
+        state.sampleBuffer = []
+        state.latestSeries = {}
+        updateEsgState(recoveredSamples.slice(-config.bufferSize))
+
+        return state.lastEsgScore
+    }
+
+    async function resolveCurrentEsgScore() {
+        if (Number.isFinite(Number(state.lastEsgScore?.overall))) {
+            return state.lastEsgScore
+        }
+
+        return hydrateEsgStateFromStoredReadings()
     }
 
     async function ingestSamples(samples, source) {
@@ -1427,19 +1575,27 @@ function createApp(options = {}) {
                 return
             }
 
-            accepted.push(createIngestionResult(source, {
-                    sensor_id: sample.sensor_id,
-                    metric_type: metricType,
-                    value: numericValue,
-                    timestamp: sample.timestamp,
-                    ...ownerMetadata,
-                }))
+            accepted.push(buildAcceptedSample(source, {
+                sensor_id: sample.sensor_id,
+                metric_type: metricType,
+                value: numericValue,
+                timestamp: sample.timestamp,
+                ...ownerMetadata,
+            }))
         })
 
         let pushResult = { pushed: 0, skipped: true, reason: "no_valid_samples" }
 
         if (accepted.length > 0) {
+            accepted.forEach((sample) => {
+                publishAcceptedSampleMetrics(sample)
+            })
             updateEsgState(accepted)
+            try {
+                await persistAcceptedSamples(accepted)
+            } catch (error) {
+                console.warn(`Sensor reading persistence failed: ${error.message}`)
+            }
             pushResult = await pushMetricsToGrafana(buildDynamicTimeSeries(accepted))
         }
 
@@ -1597,6 +1753,61 @@ function createApp(options = {}) {
         return response.data
     }
 
+    async function loadCategoryFilteredKalshiMarkets(query) {
+        const requestedCategory = normalizeKalshiCategory(query?.category)
+        const requestedStatus = String(query?.status || "").trim()
+        const requestedLimit = clamp(Number.parseInt(String(query?.limit || "100"), 10) || 100, 1, 1000)
+        const requestedCursor = String(query?.cursor || "").trim()
+        const maxPages = 5
+        let nextCursor = requestedCursor
+        let pageCount = 0
+        let hasMore = false
+        const collectedMarkets = []
+
+        while (pageCount < maxPages && collectedMarkets.length < requestedLimit) {
+            const params = {
+                ...pickKalshiQueryParams(query, KALSHI_EVENTS_QUERY_PARAMS),
+                limit: "200",
+                with_nested_markets: "true",
+            }
+
+            if (requestedStatus) {
+                params.status = normalizeKalshiStatus(requestedStatus)
+            }
+
+            if (nextCursor) {
+                params.cursor = nextCursor
+            } else {
+                delete params.cursor
+            }
+
+            const data = await callKalshiApi({
+                endpointPath: "/events",
+                params,
+            })
+
+            const events = Array.isArray(data?.events) ? data.events : []
+            const matchingEvents = events.filter((event) => (
+                !requestedCategory || normalizeKalshiCategory(event?.category) === requestedCategory
+            ))
+
+            collectedMarkets.push(...extractKalshiEventMarkets(matchingEvents, requestedStatus))
+
+            nextCursor = String(data?.cursor || "").trim()
+            hasMore = Boolean(nextCursor)
+            pageCount += 1
+
+            if (!hasMore || events.length === 0) {
+                break
+            }
+        }
+
+        return {
+            markets: collectedMarkets.slice(0, requestedLimit),
+            cursor: hasMore && collectedMarkets.length >= requestedLimit ? nextCursor : "",
+        }
+    }
+
     function resolveKalshiLimitPriceCents(marketDetail, orderbook, side) {
         const lastPrice = readKalshiMarketPriceCents(marketDetail, "last_price", "last_price_dollars")
         const sideLevels = side === "yes" ? orderbook?.yes : orderbook?.no
@@ -1628,7 +1839,7 @@ function createApp(options = {}) {
             throw new Error("ticker is required to build an ESG trade plan")
         }
 
-        const esgScore = state.lastEsgScore
+        const esgScore = await resolveCurrentEsgScore()
         const signal = buildEsgTradeSignal(esgScore)
         const marketPayload = await callKalshiApi({
             endpointPath: buildKalshiPath("markets", normalizedTicker),
@@ -2305,11 +2516,18 @@ function createApp(options = {}) {
     })
 
     app.get("/esg/status", async (req, res) => {
-        res.json({
-            config: getEsgConfig(),
-            latest: state.lastEsgScore,
-            bufferedSamples: state.sampleBuffer.length,
-        })
+        try {
+            const latestScore = await resolveCurrentEsgScore()
+
+            res.json({
+                config: getEsgConfig(),
+                latest: latestScore,
+                bufferedSamples: state.sampleBuffer.length,
+            })
+        } catch (error) {
+            console.error(`ESG status recovery failed: ${error.message}`)
+            res.status(500).json({ error: "Failed to load ESG status", detail: error.message })
+        }
     })
 
     app.get("/mwbe/status", async (req, res) => {
@@ -2325,7 +2543,7 @@ function createApp(options = {}) {
         res.json({
             config: getPublicKalshiConfig(),
             routes: {
-                markets: "GET /kalshi/markets",
+                markets: "GET /kalshi/markets?category=Companies&status=open",
                 market: "GET /kalshi/markets/:ticker",
                 orderbook: "GET /kalshi/markets/:ticker/orderbook",
                 balance: "GET /kalshi/portfolio/balance",
@@ -2339,10 +2557,13 @@ function createApp(options = {}) {
 
     app.get("/kalshi/markets", async (req, res) => {
         try {
-            const data = await callKalshiApi({
-                endpointPath: "/markets",
-                params: pickKalshiQueryParams(req.query, KALSHI_MARKETS_QUERY_PARAMS),
-            })
+            const requestedCategory = String(req.query?.category || "").trim()
+            const data = requestedCategory
+                ? await loadCategoryFilteredKalshiMarkets(req.query)
+                : await callKalshiApi({
+                    endpointPath: "/markets",
+                    params: pickKalshiQueryParams(req.query, KALSHI_MARKETS_QUERY_PARAMS),
+                })
 
             res.json(data)
         } catch (error) {

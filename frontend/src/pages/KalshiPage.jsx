@@ -2,10 +2,22 @@ import { useEffect, useMemo, useState } from "react"
 import { BACKEND_API_BASE_URL } from "../lib/api"
 
 const defaultFilters = {
+  category: "Companies",
   status: "open",
   series_ticker: "",
   limit: "12",
 }
+
+const categoryOptions = [
+  { value: "Entertainment", label: "Entertainment (33)" },
+  { value: "Crypto", label: "Crypto (3)" },
+  { value: "Mentions", label: "Mentions (31)" },
+  { value: "Economics", label: "Economics (288)" },
+  { value: "Elections", label: "Elections (126)" },
+  { value: "Science and Technology", label: "Science & technology (15)" },
+  { value: "Companies", label: "Companies (14)" },
+  { value: "Financials", label: "Financials (1)" },
+]
 
 const statusOptions = [
   { value: "open", label: "Open" },
@@ -98,6 +110,31 @@ function formatUnixTimestamp(value) {
   return new Date(timestampMs).toLocaleString()
 }
 
+function parseOrderTimestamp(order) {
+  const timestampValue = order?.created_time || order?.last_update_time || order?.updated_ts
+
+  if (!timestampValue) {
+    return 0
+  }
+
+  const parsed = Date.parse(timestampValue)
+
+  if (Number.isFinite(parsed)) {
+    return parsed
+  }
+
+  const numericValue = Number(timestampValue)
+  if (!Number.isFinite(numericValue)) {
+    return 0
+  }
+
+  return numericValue > 1_000_000_000_000 ? numericValue : numericValue * 1000
+}
+
+function formatOrderCount(order) {
+  return formatValue(order?.remaining_count_fp || order?.remaining_count || order?.count || order?.initial_count_fp)
+}
+
 function formatPortfolioLabel(key) {
   if (key === "updated_ts") {
     return "Updated"
@@ -183,6 +220,10 @@ function extractOrders(payload) {
   }
 
   return []
+}
+
+function sortOrdersNewestFirst(orders) {
+  return [...orders].sort((left, right) => parseOrderTimestamp(right) - parseOrderTimestamp(left))
 }
 
 function buildScenarioPayload(preset) {
@@ -328,6 +369,15 @@ function KalshiPage() {
     }
   }
 
+  async function handleResetMarkets() {
+    setTradeResult(null)
+    setTradeSubmitError("")
+    setTradePlanError("")
+    const nextFilters = { ...defaultFilters }
+    setFilters(nextFilters)
+    await loadMarkets(nextFilters)
+  }
+
   async function loadMarketSnapshot(ticker) {
     if (!ticker) {
       return
@@ -368,13 +418,20 @@ function KalshiPage() {
     }
   }
 
-  async function loadOrders() {
+  async function loadOrders(options = {}) {
     setLoadingOrders(true)
     setOrdersError("")
 
     try {
-      const payload = await fetchJson(`${BACKEND_API_BASE_URL}/kalshi/portfolio/orders?limit=5`)
-      setRecentOrders(extractOrders(payload))
+      const params = new URLSearchParams({ limit: "25" })
+      const ticker = String(options?.ticker || "").trim()
+
+      if (ticker) {
+        params.set("ticker", ticker)
+      }
+
+      const payload = await fetchJson(`${BACKEND_API_BASE_URL}/kalshi/portfolio/orders?${params.toString()}`)
+      setRecentOrders(sortOrdersNewestFirst(extractOrders(payload)))
     } catch (error) {
       setRecentOrders([])
       setOrdersError(error.message || "Failed to load recent orders")
@@ -466,7 +523,7 @@ function KalshiPage() {
       setTradeResult(payload)
       await Promise.all([
         loadPortfolioBalance(),
-        loadOrders(),
+        loadOrders({ ticker: selectedTicker }),
         loadTradePlan(selectedTicker),
       ])
     } catch (error) {
@@ -745,6 +802,11 @@ function KalshiPage() {
                   </p>
                 ) : null}
               </div>
+              {tradePlan?.orderbook?.[tradePlan?.signal?.side]?.length === 0 ? (
+                <p className="text-[0.9rem] text-[var(--muted)]">
+                  This market has no displayed resting volume on the selected side right now, so a submitted demo order may rest instead of filling immediately.
+                </p>
+              ) : null}
 
               {tradeResult?.order ? (
                 <div className="rounded-[8px] border border-[rgba(62,207,142,0.28)] bg-[rgba(62,207,142,0.08)] px-4 py-4">
@@ -755,6 +817,14 @@ function KalshiPage() {
                   <p className="mt-2 text-[0.9rem] text-[var(--muted)]">
                     Returned order id: {formatValue(tradeResult?.order?.order?.order_id || tradeResult?.order?.order_id)}
                   </p>
+                  <p className="mt-2 text-[0.9rem] text-[var(--muted)]">
+                    Order status: {formatValue(tradeResult?.order?.order?.status || tradeResult?.order?.status)}
+                  </p>
+                  {(tradeResult?.order?.order?.status || tradeResult?.order?.status) === "resting" ? (
+                    <p className="mt-2 text-[0.9rem] text-[var(--muted)]">
+                      The order reached Kalshi successfully and is waiting for a matching counter-order.
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -769,6 +839,23 @@ function KalshiPage() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
         <article className={cardClassName}>
           <div className="mb-4 flex flex-wrap items-end gap-3">
+            <div className="min-w-[210px] flex-1">
+              <label className="mb-2 block text-[0.82rem] uppercase tracking-[0.05em] text-[var(--muted)]" htmlFor="kalshi-category-filter">
+                Category
+              </label>
+              <select
+                id="kalshi-category-filter"
+                className={fieldClassName}
+                value={filters.category}
+                onChange={(event) => setFilters((current) => ({ ...current, category: event.target.value }))}
+              >
+                {categoryOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="min-w-[150px] flex-1">
               <label className="mb-2 block text-[0.82rem] uppercase tracking-[0.05em] text-[var(--muted)]" htmlFor="kalshi-series-ticker">
                 Series ticker
@@ -818,28 +905,21 @@ function KalshiPage() {
             >
               {loadingMarkets ? "Loading..." : "Load markets"}
             </button>
-          </div>
-
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <p className={sectionLabelClassName}>Markets</p>
-              <p className="text-[0.94rem] text-[var(--muted)]">
-                {markets.length} markets loaded{marketsCursor ? `, cursor ${marketsCursor}` : ""}.
-              </p>
-            </div>
             <button
               type="button"
               className={secondaryButtonClassName}
-              onClick={() => {
-                void loadStatus()
-                void loadPortfolioBalance()
-                void loadOrders()
-                void loadMarkets(filters)
-              }}
-              disabled={loadingStatus || loadingPortfolio || loadingOrders || loadingMarkets}
+              onClick={() => void handleResetMarkets()}
+              disabled={loadingMarkets}
             >
-              Refresh all
+              Reset all
             </button>
+          </div>
+
+          <div className="mb-3">
+            <p className={sectionLabelClassName}>Markets</p>
+            <p className="text-[0.94rem] text-[var(--muted)]">
+              {markets.length} markets loaded{marketsCursor ? `, cursor ${marketsCursor}` : ""}.
+            </p>
           </div>
 
           {marketsError ? <p className="mb-3 text-[0.92rem] text-[#f9b4b4]">{marketsError}</p> : null}
@@ -1003,7 +1083,10 @@ function KalshiPage() {
                       </p>
                     </div>
                     <p className="mt-2 text-[0.9rem] text-[var(--muted)]">
-                      {String(order?.side || "").toUpperCase()} {formatValue(order?.action)} / Count {formatValue(order?.remaining_count ?? order?.count)}
+                      {String(order?.side || "").toUpperCase()} {formatValue(order?.action)} / Count {formatOrderCount(order)}
+                    </p>
+                    <p className="mt-1 text-[0.84rem] text-[var(--muted)]">
+                      {formatDate(order?.created_time || order?.last_update_time)}
                     </p>
                   </div>
                 ))}

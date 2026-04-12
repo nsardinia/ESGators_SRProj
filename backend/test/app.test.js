@@ -126,11 +126,33 @@ class MockSupabaseQuery {
 
 class MockSupabaseClient {
     constructor(tables = {}) {
-        this.tables = tables
+        this.tables = Object.fromEntries(
+            Object.entries(tables).map(([tableName, rows]) => [tableName, [...rows]])
+        )
+        this.inserted = []
     }
 
     from(tableName) {
-        return new MockSupabaseQuery(this.tables[tableName] || [])
+        return {
+            insert: async (payload) => {
+                const rows = Array.isArray(payload) ? payload : [payload]
+                this.tables[tableName] = this.tables[tableName] || []
+
+                rows.forEach((row, index) => {
+                    const nextRow = {
+                        id: row.id || `${tableName}-${this.tables[tableName].length + index + 1}`,
+                        created_at: row.created_at || new Date().toISOString(),
+                        ...row,
+                    }
+
+                    this.tables[tableName].push(nextRow)
+                    this.inserted.push(nextRow)
+                })
+
+                return { data: rows, error: null }
+            },
+            select: () => new MockSupabaseQuery(this.tables[tableName] || []),
+        }
     }
 }
 
@@ -194,6 +216,36 @@ test("batch ingestion calculates ESG score and reports remote write status", asy
     }
 })
 
+test("batch ingestion persists accepted samples to sensor_readings when Supabase is available", async () => {
+    const supabase = new MockSupabaseClient({ sensor_readings: [] })
+    const server = await createTestServer({ supabase })
+    const now = Date.now()
+
+    try {
+        const response = await fetch(`${server.baseUrl}/iot/data/batch`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                source: "test-suite",
+                samples: [
+                    { sensor_id: "sensor-persist", metric_type: "temperature", value: 24, timestamp: now },
+                    { sensor_id: "sensor-persist", metric_type: "humidity", value: 48, timestamp: now + 1 },
+                ],
+            }),
+        })
+
+        assert.equal(response.status, 200)
+        assert.equal(supabase.inserted.length, 2)
+        assert.equal(supabase.tables.sensor_readings.length, 2)
+        assert.equal(supabase.inserted[0].sensor_id, "sensor-persist")
+        assert.equal(supabase.inserted[0].metric_type, "temperature")
+    } finally {
+        await server.close()
+    }
+})
+
 test("metrics endpoint exposes Prometheus-formatted sensor and ESG values", async () => {
     const server = await createTestServer()
     const now = Date.now()
@@ -221,6 +273,51 @@ test("metrics endpoint exposes Prometheus-formatted sensor and ESG values", asyn
         assert.match(metricsText, /sensor_data_anomaly_flag\{sensor_id="sensor-prom",metric_type="temperature",source="test-suite",owner_uid="unknown",owner_email="unknown",device_name="sensor-prom",severity="warning"\} 1/)
         assert.match(metricsText, /esg_environment_score\{scope="overall"\} 71\.43/)
         assert.match(metricsText, /esg_buffer_size 1/)
+    } finally {
+        await server.close()
+    }
+})
+
+test("esg status rebuilds from stored sensor_readings when memory is empty", async () => {
+    const now = Date.now()
+    const supabase = new MockSupabaseClient({
+        sensor_readings: [
+            {
+                id: "row-1",
+                sensor_id: "sensor-restored",
+                metric_type: "temperature",
+                value: 24,
+                recorded_at: new Date(now - 5000).toISOString(),
+                created_at: new Date(now - 5000).toISOString(),
+            },
+            {
+                id: "row-2",
+                sensor_id: "sensor-restored",
+                metric_type: "humidity",
+                value: 46,
+                recorded_at: new Date(now - 4000).toISOString(),
+                created_at: new Date(now - 4000).toISOString(),
+            },
+            {
+                id: "row-3",
+                sensor_id: "sensor-restored",
+                metric_type: "air_quality",
+                value: 42,
+                recorded_at: new Date(now - 3000).toISOString(),
+                created_at: new Date(now - 3000).toISOString(),
+            },
+        ],
+    })
+    const server = await createTestServer({ supabase })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/esg/status`)
+        assert.equal(response.status, 200)
+
+        const body = await response.json()
+        assert.equal(body.latest.overall, 100)
+        assert.equal(body.bufferedSamples, 3)
+        assert.equal(body.latest.metricScores.temperature, 100)
     } finally {
         await server.close()
     }

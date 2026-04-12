@@ -46,6 +46,67 @@ function clearKalshiEnv() {
     })
 }
 
+class MockSupabaseQuery {
+    constructor(rows) {
+        this.rows = rows
+        this.gteFilter = null
+        this.sort = null
+    }
+
+    select() {
+        return this
+    }
+
+    gte(column, value) {
+        this.gteFilter = { column, value }
+        return this
+    }
+
+    order(column, options) {
+        this.sort = { column, ascending: options?.ascending !== false }
+        return this
+    }
+
+    then(resolve, reject) {
+        let data = [...this.rows]
+
+        if (this.gteFilter) {
+            data = data.filter((row) => row[this.gteFilter.column] >= this.gteFilter.value)
+        }
+
+        if (this.sort) {
+            data.sort((left, right) => {
+                const leftValue = left[this.sort.column]
+                const rightValue = right[this.sort.column]
+                const comparison = leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0
+                return this.sort.ascending ? comparison : comparison * -1
+            })
+        }
+
+        return Promise.resolve({ data, error: null }).then(resolve, reject)
+    }
+}
+
+class MockSupabaseClient {
+    constructor(tables = {}) {
+        this.tables = Object.fromEntries(
+            Object.entries(tables).map(([tableName, rows]) => [tableName, [...rows]])
+        )
+    }
+
+    from(tableName) {
+        return {
+            select: () => new MockSupabaseQuery(this.tables[tableName] || []),
+            insert: async (payload) => {
+                const rows = Array.isArray(payload) ? payload : [payload]
+                this.tables[tableName] = this.tables[tableName] || []
+                this.tables[tableName].push(...rows)
+                return { data: rows, error: null }
+            },
+        }
+    }
+}
+
 async function createTestServer(options = {}) {
     const runtime = startServer({
         port: 0,
@@ -120,6 +181,75 @@ test("GET /kalshi/markets proxies public market data without credentials", async
             status: "open",
         })
         assert.deepEqual(calls[0].headers, {})
+    } finally {
+        await server.close()
+        restoreKalshiEnv(env)
+    }
+})
+
+test("GET /kalshi/markets filters nested event markets by category when requested", async () => {
+    const env = snapshotKalshiEnv()
+    clearKalshiEnv()
+    const calls = []
+    const server = await createTestServer({
+        kalshiHttpClient: async (config) => {
+            calls.push(config)
+
+            return {
+                data: {
+                    events: [
+                        {
+                            event_ticker: "KXCOMPANY-EVENT",
+                            series_ticker: "KXCOMPANYSERIES",
+                            category: "Companies",
+                            markets: [
+                                {
+                                    ticker: "KXCOMPANY-1",
+                                    title: "Will the company launch?",
+                                    status: "active",
+                                },
+                            ],
+                        },
+                        {
+                            event_ticker: "KXCRYPTO-EVENT",
+                            series_ticker: "KXCRYPTOSERIES",
+                            category: "Crypto",
+                            markets: [
+                                {
+                                    ticker: "KXCRYPTO-1",
+                                    title: "Will BTC move?",
+                                    status: "active",
+                                },
+                            ],
+                        },
+                    ],
+                    cursor: "",
+                },
+            }
+        },
+    })
+
+    try {
+        const response = await fetch(
+            `${server.baseUrl}/kalshi/markets?category=Companies&status=open&limit=2`
+        )
+
+        assert.equal(response.status, 200)
+        const body = await response.json()
+        assert.deepEqual(
+            body.markets.map((market) => market.ticker),
+            ["KXCOMPANY-1"]
+        )
+        assert.equal(body.markets[0].category, "Companies")
+        assert.equal(body.markets[0].series_ticker, "KXCOMPANYSERIES")
+        assert.equal(calls.length, 1)
+        assert.equal(calls[0].method, "GET")
+        assert.equal(calls[0].url, `${DEFAULT_KALSHI_BASE_URL}/events`)
+        assert.deepEqual(calls[0].params, {
+            limit: "200",
+            with_nested_markets: "true",
+            status: "open",
+        })
     } finally {
         await server.close()
         restoreKalshiEnv(env)
@@ -305,6 +435,81 @@ test("GET /kalshi/esg/trade-plan builds a bullish demo plan from a healthy ESG s
         assert.equal(body.orderPreview.yes_price, 49)
         assert.equal(body.orderPreview.time_in_force, "good_till_canceled")
         assert.equal(body.esg.overall, 100)
+        assert.equal(calls.length, 2)
+    } finally {
+        await server.close()
+        restoreKalshiEnv(env)
+    }
+})
+
+test("GET /kalshi/esg/trade-plan rebuilds ESG state from stored sensor_readings", async () => {
+    const env = snapshotKalshiEnv()
+    clearKalshiEnv()
+    const now = Date.now()
+    const calls = []
+    const supabase = new MockSupabaseClient({
+        sensor_readings: [
+            {
+                sensor_id: "sensor-recovered",
+                metric_type: "temperature",
+                value: 24,
+                recorded_at: new Date(now - 3000).toISOString(),
+            },
+            {
+                sensor_id: "sensor-recovered",
+                metric_type: "humidity",
+                value: 47,
+                recorded_at: new Date(now - 2000).toISOString(),
+            },
+            {
+                sensor_id: "sensor-recovered",
+                metric_type: "air_quality",
+                value: 43,
+                recorded_at: new Date(now - 1000).toISOString(),
+            },
+        ],
+    })
+    const server = await createTestServer({
+        supabase,
+        kalshiHttpClient: async (config) => {
+            calls.push(config)
+
+            if (config.url.endsWith("/markets/KXESG-RECOVER")) {
+                return {
+                    data: {
+                        ticker: "KXESG-RECOVER",
+                        title: "Will the recovered ESG score trade?",
+                        status: "open",
+                        yes_ask: 44,
+                        no_ask: 56,
+                        last_price: 43,
+                    },
+                }
+            }
+
+            if (config.url.endsWith("/markets/KXESG-RECOVER/orderbook")) {
+                return {
+                    data: {
+                        orderbook_fp: {
+                            yes_dollars: [["0.4400", "20.00"]],
+                            no_dollars: [["0.5600", "18.00"]],
+                        },
+                    },
+                }
+            }
+
+            throw new Error(`Unexpected Kalshi URL: ${config.url}`)
+        },
+    })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/kalshi/esg/trade-plan?ticker=KXESG-RECOVER`)
+        assert.equal(response.status, 200)
+
+        const body = await response.json()
+        assert.equal(body.esg.overall, 100)
+        assert.equal(body.market.ticker, "KXESG-RECOVER")
+        assert.equal(body.signal.side, "yes")
         assert.equal(calls.length, 2)
     } finally {
         await server.close()
