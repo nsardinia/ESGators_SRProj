@@ -58,6 +58,8 @@ const primaryButtonClassName =
   "inline-flex min-h-10 items-center justify-center rounded-[8px] border border-[rgba(62,207,142,0.45)] bg-[rgba(62,207,142,0.18)] px-4 py-2 text-[0.94rem] text-[#d3f5e4] transition-colors hover:border-[rgba(62,207,142,0.62)] hover:bg-[rgba(62,207,142,0.24)] disabled:cursor-not-allowed disabled:opacity-60"
 const secondaryButtonClassName =
   "inline-flex min-h-10 items-center justify-center rounded-[8px] border border-[var(--border)] bg-[#1a2232] px-4 py-2 text-[0.94rem] text-[var(--text)] transition-colors hover:border-[#334055] hover:bg-[#20293b] disabled:cursor-not-allowed disabled:opacity-60"
+const activeToggleButtonClassName =
+  "inline-flex min-h-10 items-center justify-center rounded-[8px] border border-[rgba(62,207,142,0.45)] bg-[rgba(62,207,142,0.18)] px-4 py-2 text-[0.94rem] font-semibold text-[#d3f5e4] transition-colors hover:border-[rgba(62,207,142,0.62)] hover:bg-[rgba(62,207,142,0.24)] disabled:cursor-not-allowed disabled:opacity-60"
 const usdFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -296,6 +298,32 @@ async function fetchJson(url, options = {}) {
   return body
 }
 
+function buildTradePlanParams(ticker, draft = {}) {
+  const params = new URLSearchParams()
+  const normalizedTicker = String(ticker || "").trim()
+
+  if (normalizedTicker) {
+    params.set("ticker", normalizedTicker)
+  }
+
+  const normalizedSide = String(draft?.side || "").trim().toLowerCase()
+  if (normalizedSide === "yes" || normalizedSide === "no") {
+    params.set("side", normalizedSide)
+  }
+
+  const normalizedAction = String(draft?.action || "").trim().toLowerCase()
+  if (normalizedAction === "buy" || normalizedAction === "sell") {
+    params.set("action", normalizedAction)
+  }
+
+  const normalizedCount = Number.parseInt(String(draft?.count || "").trim(), 10)
+  if (Number.isInteger(normalizedCount) && normalizedCount > 0) {
+    params.set("count", String(normalizedCount))
+  }
+
+  return params
+}
+
 function KalshiPage() {
   const { user } = useAuth()
   const { createdNodes } = useOwnedNodes(user)
@@ -311,6 +339,11 @@ function KalshiPage() {
   const [esgStatus, setEsgStatus] = useState(null)
   const [tradePlan, setTradePlan] = useState(null)
   const [tradeResult, setTradeResult] = useState(null)
+  const [tradeDraft, setTradeDraft] = useState({
+    side: "",
+    action: "",
+    count: "",
+  })
   const [statusError, setStatusError] = useState("")
   const [marketsError, setMarketsError] = useState("")
   const [detailError, setDetailError] = useState("")
@@ -390,6 +423,11 @@ function KalshiPage() {
     setTradeResult(null)
     setTradeSubmitError("")
     setTradePlanError("")
+    setTradeDraft({
+      side: "",
+      action: "",
+      count: "",
+    })
     const nextFilters = { ...defaultFilters }
     setFilters(nextFilters)
     await loadMarkets(nextFilters)
@@ -472,7 +510,7 @@ function KalshiPage() {
     }
   }
 
-  async function loadTradePlan(ticker = selectedTicker) {
+  async function loadTradePlan(ticker = selectedTicker, draft = {}) {
     if (!ticker) {
       setTradePlan(null)
       return
@@ -482,11 +520,17 @@ function KalshiPage() {
     setTradePlanError("")
 
     try {
-      const payload = await fetchJson(`${BACKEND_API_BASE_URL}/kalshi/esg/trade-plan?ticker=${encodeURIComponent(ticker)}`)
+      const params = buildTradePlanParams(ticker, draft)
+      const payload = await fetchJson(`${BACKEND_API_BASE_URL}/kalshi/esg/trade-plan?${params.toString()}`)
       setTradePlan(payload)
+      setTradeDraft({
+        side: String(payload?.signal?.side || "").toLowerCase(),
+        action: String(payload?.signal?.action || "").toLowerCase(),
+        count: String(payload?.signal?.count || ""),
+      })
     } catch (error) {
       setTradePlan(null)
-      setTradePlanError(error.message || "Failed to load ESG trade plan")
+      setTradePlanError(error.message || "Failed to load the demo order quote")
     } finally {
       setLoadingTradePlan(false)
     }
@@ -508,7 +552,7 @@ function KalshiPage() {
 
       await loadEsgStatus()
       if (selectedTicker) {
-        await loadTradePlan(selectedTicker)
+        await loadTradePlan(selectedTicker, tradeDraft)
       }
     } catch (error) {
       setEsgError(error.message || "Failed to seed ESG demo scenario")
@@ -534,20 +578,56 @@ function KalshiPage() {
         },
         body: JSON.stringify({
           ticker: selectedTicker,
+          side: tradeDraft.side,
+          action: tradeDraft.action,
+          count: tradeDraft.count,
         }),
       })
 
       setTradeResult(payload)
+      if (payload?.plan) {
+        setTradePlan(payload.plan)
+      }
       await Promise.all([
         loadPortfolioBalance(),
         loadOrders({ ticker: selectedTicker }),
-        loadTradePlan(selectedTicker),
+        loadTradePlan(selectedTicker, tradeDraft),
       ])
     } catch (error) {
       setTradeSubmitError(error.message || "Failed to place demo trade")
     } finally {
       setTradeSubmitting(false)
     }
+  }
+
+  function handleTradeDraftInput(key, value) {
+    setTradeDraft((current) => ({
+      ...current,
+      [key]: value,
+    }))
+  }
+
+  async function handleTradeSelectionChange(key, value) {
+    const nextDraft = {
+      ...tradeDraft,
+      [key]: value,
+    }
+
+    setTradeDraft(nextDraft)
+
+    if (!selectedTicker || !Number.isFinite(latestOverall)) {
+      return
+    }
+
+    await loadTradePlan(selectedTicker, nextDraft)
+  }
+
+  async function handleRefreshTradeQuote() {
+    if (!selectedTicker) {
+      return
+    }
+
+    await loadTradePlan(selectedTicker, tradeDraft)
   }
 
   useEffect(() => {
@@ -568,7 +648,7 @@ function KalshiPage() {
 
     if (!Number.isFinite(latestOverall)) {
       setTradePlan(null)
-      setTradePlanError("Generate or sync ESG data to build a demo trading plan.")
+      setTradePlanError("Generate or sync ESG data to prepare the demo order controls.")
       return
     }
 
@@ -666,6 +746,13 @@ function KalshiPage() {
   }, [filters.category, markets, nearbyCompanyHintsByTicker])
 
   const nearbyCompanyCount = Object.keys(nearbyCompanyHintsByTicker).length
+  const selectedAction = tradeDraft.action || String(tradePlan?.signal?.action || "buy").toLowerCase()
+  const selectedSide = tradeDraft.side || String(tradePlan?.signal?.side || "yes").toLowerCase()
+  const selectedCount = tradeDraft.count || String(tradePlan?.signal?.count || "")
+  const recommendedAction = String(tradePlan?.signal?.action || "").toLowerCase()
+  const recommendedSide = String(tradePlan?.signal?.side || "").toLowerCase()
+  const recommendedSelectionMatches = selectedAction === recommendedAction && selectedSide === recommendedSide
+  const selectedSideOrderbook = tradePlan?.orderbook?.[selectedSide] || []
 
   const selectedMarketTitle = marketDetail?.title || marketDetail?.subtitle || marketDetail?.question || selectedTicker
   const kalshiConfig = statusPayload?.config
@@ -682,7 +769,7 @@ function KalshiPage() {
           ESG-to-trade demo
         </h1>
         <p className="max-w-[820px] text-base leading-7 text-[var(--muted)]">
-          Turn the live ESG report into a demo trading signal, preview the order against a Kalshi market, and submit a
+          Turn the live ESG report into a demo trading signal, preview the order quote against a Kalshi market, and submit a
           signed trade in the demo environment.
         </p>
       </div>
@@ -835,16 +922,16 @@ function KalshiPage() {
         <article className={cardClassName}>
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <p className={sectionLabelClassName}>Trade Plan</p>
-              <h2 className="text-[1.12rem] font-semibold text-[var(--text)]">ESG-driven demo order</h2>
+              <p className={sectionLabelClassName}>Buy / Sell</p>
+              <h2 className="text-[1.12rem] font-semibold text-[var(--text)]">Demo order controls</h2>
             </div>
             <button
               type="button"
               className={secondaryButtonClassName}
-              onClick={() => void loadTradePlan(selectedTicker)}
+              onClick={() => void handleRefreshTradeQuote()}
               disabled={loadingTradePlan || !selectedTicker}
             >
-              {loadingTradePlan ? "Refreshing..." : "Refresh plan"}
+              {loadingTradePlan ? "Refreshing..." : "Refresh quote"}
             </button>
           </div>
 
@@ -852,14 +939,66 @@ function KalshiPage() {
           {tradeSubmitError ? <p className="mb-3 text-[0.92rem] text-[#f9b4b4]">{tradeSubmitError}</p> : null}
 
           {loadingTradePlan ? (
-            <p className="text-[0.95rem] text-[var(--muted)]">Building the trade plan from the latest ESG report...</p>
+            <p className="text-[0.95rem] text-[var(--muted)]">Refreshing the order quote from the latest ESG report...</p>
           ) : tradePlan ? (
             <div className="space-y-4">
+              <div className="grid gap-3">
+                <div>
+                  <p className="mb-2 text-[0.82rem] uppercase tracking-[0.05em] text-[var(--muted)]">Action</p>
+                  <div className="flex flex-wrap gap-2">
+                    {["buy", "sell"].map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        className={selectedAction === option ? activeToggleButtonClassName : secondaryButtonClassName}
+                        onClick={() => void handleTradeSelectionChange("action", option)}
+                        disabled={loadingTradePlan}
+                      >
+                        {option === "buy" ? "Buy" : "Sell"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="mb-2 text-[0.82rem] uppercase tracking-[0.05em] text-[var(--muted)]">Side</p>
+                  <div className="flex flex-wrap gap-2">
+                    {["yes", "no"].map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        className={selectedSide === option ? activeToggleButtonClassName : secondaryButtonClassName}
+                        onClick={() => void handleTradeSelectionChange("side", option)}
+                        disabled={loadingTradePlan}
+                      >
+                        {option.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="max-w-[180px]">
+                  <label className="mb-2 block text-[0.82rem] uppercase tracking-[0.05em] text-[var(--muted)]" htmlFor="kalshi-trade-count">
+                    Contracts
+                  </label>
+                  <input
+                    id="kalshi-trade-count"
+                    className={fieldClassName}
+                    value={selectedCount}
+                    onChange={(event) => handleTradeDraftInput("count", event.target.value.replace(/[^\d]/g, ""))}
+                    inputMode="numeric"
+                  />
+                </div>
+              </div>
+
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="rounded-[8px] border border-[var(--border)] bg-[#121927] px-4 py-3">
-                  <p className="text-[0.78rem] uppercase tracking-[0.05em] text-[var(--muted)]">Recommended side</p>
+                  <p className="text-[0.78rem] uppercase tracking-[0.05em] text-[var(--muted)]">Current order</p>
                   <p className="mt-2 text-[1.1rem] font-semibold text-[var(--text)]">
-                    {String(tradePlan?.signal?.side || "").toUpperCase()} {formatValue(tradePlan?.signal?.action)}
+                    {selectedAction.toUpperCase()} {selectedSide.toUpperCase()}
+                  </p>
+                  <p className="mt-2 text-[0.88rem] text-[var(--muted)]">
+                    ESG recommendation: {recommendedAction.toUpperCase()} {recommendedSide.toUpperCase()}
                   </p>
                 </div>
                 <div className="rounded-[8px] border border-[var(--border)] bg-[#121927] px-4 py-3">
@@ -867,15 +1006,25 @@ function KalshiPage() {
                   <p className="mt-2 text-[1.1rem] font-semibold text-[var(--text)]">
                     {formatValue(tradePlan?.signal?.count)} @ {formatValue(tradePlan?.signal?.limitPriceCents)}c
                   </p>
+                  <p className="mt-2 text-[0.88rem] text-[var(--muted)]">
+                    Confidence: {formatValue(tradePlan?.signal?.confidence)}
+                  </p>
                 </div>
               </div>
 
               <div className="rounded-[8px] border border-[var(--border)] bg-[#121927] px-4 py-4">
-                <p className="text-[0.82rem] uppercase tracking-[0.05em] text-[var(--muted)]">Rationale</p>
+                <p className="text-[0.82rem] uppercase tracking-[0.05em] text-[var(--muted)]">Execution note</p>
                 <p className="mt-2 text-[0.96rem] leading-7 text-[var(--text)]">{tradePlan?.signal?.rationale}</p>
                 <p className="mt-3 text-[0.9rem] text-[var(--muted)]">
-                  Market: {formatValue(tradePlan?.market?.title)} ({formatValue(tradePlan?.market?.ticker)}) / Confidence: {formatValue(tradePlan?.signal?.confidence)}
+                  Market: {formatValue(tradePlan?.market?.title)} ({formatValue(tradePlan?.market?.ticker)})
                 </p>
+                {recommendedSelectionMatches ? (
+                  <p className="mt-2 text-[0.9rem] text-[#8ed5bb]">This order matches the current ESG recommendation.</p>
+                ) : (
+                  <p className="mt-2 text-[0.9rem] text-[var(--muted)]">
+                    This order overrides the ESG recommendation for manual demo trading.
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-wrap gap-3">
@@ -885,7 +1034,7 @@ function KalshiPage() {
                   onClick={() => void handlePlaceTrade()}
                   disabled={tradeSubmitting || !authenticatedTradingReady}
                 >
-                  {tradeSubmitting ? "Placing demo order..." : "Place demo order"}
+                  {tradeSubmitting ? "Submitting..." : `Place ${selectedAction} order`}
                 </button>
                 {!authenticatedTradingReady ? (
                   <p className="self-center text-[0.9rem] text-[var(--muted)]">
@@ -893,9 +1042,9 @@ function KalshiPage() {
                   </p>
                 ) : null}
               </div>
-              {tradePlan?.orderbook?.[tradePlan?.signal?.side]?.length === 0 ? (
+              {selectedSideOrderbook.length === 0 ? (
                 <p className="text-[0.9rem] text-[var(--muted)]">
-                  This market has no displayed resting volume on the selected side right now, so a submitted demo order may rest instead of filling immediately.
+                  This market has no displayed resting volume on the selected side right now, so this order may rest instead of filling immediately.
                 </p>
               ) : null}
 
@@ -921,7 +1070,7 @@ function KalshiPage() {
             </div>
           ) : (
             <p className="text-[0.95rem] text-[var(--muted)]">
-              Select a market and make sure an ESG score exists to generate the demo order plan.
+              Select a market and make sure an ESG score exists to prepare the buy and sell controls.
             </p>
           )}
         </article>
