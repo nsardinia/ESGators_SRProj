@@ -72,4 +72,17 @@ const MWBE_API_BASE_URL = resolveMwbeApiBaseUrl()
 const BACKEND_API_BASE_URL = resolveBackendApiBaseUrl()
 const API_BASE_URL = MWBE_API_BASE_URL
 
-export { API_BASE_URL, BACKEND_API_BASE_URL, MWBE_API_BASE_URL }
+async function getAuthHeaders(user, headers = {}) {
+  if (!user) {
+    return headers
+  }
+
+  const token = await user.getIdToken()
+
+  return {
+    ...headers,
+    Authorization: `Bearer ${token}`,
+  }
+}
+
+export { API_BASE_URL, BACKEND_API_BASE_URL, MWBE_API_BASE_URL, getAuthHeaders }

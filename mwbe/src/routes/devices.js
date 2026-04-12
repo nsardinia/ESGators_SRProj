@@ -5,31 +5,35 @@
  */
 
 const crypto = require("node:crypto");
+const {
+  constants: { MAX_HISTORY_LIMIT },
+  helpers: { clampHistoryLimit },
+} = require("../services/deviceHistory");
+const { verifyFirebaseUser } = require("../lib/firebaseUserAuth");
 
 const claimQuerySchema = {
   type: "object",
-  required: ["ownerUid"],
   additionalProperties: false,
-  properties: {
-    ownerUid: { type: "string", minLength: 1, maxLength: 255 },
-  },
+  properties: {},
 };
 
 const ownerQuerySchema = {
   type: "object",
-  required: ["ownerUid"],
   additionalProperties: false,
-  properties: {
-    ownerUid: { type: "string", minLength: 1, maxLength: 255 },
-  },
+  properties: {},
+};
+
+const deleteDeviceQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {},
 };
 
 const claimBodySchema = {
   type: "object",
-  required: ["ownerUid", "name", "description"],
+  required: ["name", "description"],
   additionalProperties: false,
   properties: {
-    ownerUid: { type: "string", minLength: 1, maxLength: 255 },
     name: { type: "string", minLength: 1, maxLength: 120 },
     description: { type: "string", minLength: 1, maxLength: 500 },
   },
@@ -51,6 +55,16 @@ const deviceIdParamSchema = {
   additionalProperties: false,
   properties: {
     deviceId: { type: "string", minLength: 1, maxLength: 255 },
+  },
+};
+
+const deviceHistoryQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    start: { type: "string", format: "date-time" },
+    end: { type: "string", format: "date-time" },
+    limit: { type: "integer", minimum: 1, maximum: MAX_HISTORY_LIMIT },
   },
 };
 
@@ -97,6 +111,9 @@ const provisionedDeviceSchema = {
     firebaseCustomToken: { type: "string" },
     firebaseUid: { type: "string" },
     deviceId: { type: "string" },
+    ownerFirebaseUid: { type: "string" },
+    firebaseRootPath: { type: "string" },
+    firebaseDevicePath: { type: "string" },
   },
 };
 
@@ -106,6 +123,38 @@ const revokedDeviceSchema = {
     deviceId: { type: "string" },
     status: { type: "string" },
     revokedAt: { type: "string", format: "date-time" },
+  },
+};
+
+const deviceHistorySampleSchema = {
+  type: "object",
+  properties: {
+    deviceId: { type: "string" },
+    ownerUid: { type: "string" },
+    ownerFirebaseUid: { type: ["string", "null"] },
+    capturedAt: { type: "string", format: "date-time" },
+    sourceUpdatedAt: { type: "string", format: "date-time" },
+    sampleIntervalStart: { type: "string", format: "date-time" },
+    no2: { type: ["number", "null"] },
+    soundLevel: { type: ["number", "null"] },
+    particulateMatterLevel: { type: ["number", "null"] },
+    temperature: { type: ["number", "null"] },
+    humidity: { type: ["number", "null"] },
+    rawPayload: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: true,
+        },
+        {
+          type: "array",
+          items: {},
+        },
+        {
+          type: "null",
+        },
+      ],
+    },
   },
 };
 
@@ -148,6 +197,54 @@ function generateDeviceId() {
 
 function generateDeviceSecret() {
   return crypto.randomBytes(32).toString("base64url");
+}
+
+function encodeOwnerHint(ownerUid) {
+  return Buffer.from(String(ownerUid || ""), "utf8").toString("base64url");
+}
+
+function createProvisioningSecret(ownerUid, rawSecret) {
+  const normalizedOwnerUid = String(ownerUid || "").trim();
+  const normalizedRawSecret = String(rawSecret || "").trim();
+
+  if (!normalizedOwnerUid || !normalizedRawSecret) {
+    return normalizedRawSecret;
+  }
+
+  return `esg1.${encodeOwnerHint(normalizedOwnerUid)}.${normalizedRawSecret}`;
+}
+
+function parseProvisioningSecret(secret) {
+  const normalizedSecret = String(secret || "").trim();
+
+  if (!normalizedSecret) {
+    return {
+      ownerHint: "",
+      rawSecret: "",
+    };
+  }
+
+  const parts = normalizedSecret.split(".");
+  if (parts.length !== 3 || parts[0] !== "esg1") {
+    return {
+      ownerHint: "",
+      rawSecret: normalizedSecret,
+    };
+  }
+
+  try {
+    const ownerHint = Buffer.from(parts[1], "base64url").toString("utf8").trim();
+
+    return {
+      ownerHint,
+      rawSecret: parts[2],
+    };
+  } catch {
+    return {
+      ownerHint: "",
+      rawSecret: normalizedSecret,
+    };
+  }
 }
 
 function createSecretHash(secret) {
@@ -208,6 +305,28 @@ async function findOwner(app, ownerUid) {
   return ownerById;
 }
 
+async function findOwnerByDeviceOwnerKey(app, ownerKey) {
+  if (!ownerKey) {
+    return null;
+  }
+
+  return findOwner(app, ownerKey);
+}
+
+function ownerMatchesHint(owner, ownerHint) {
+  const normalizedOwnerHint = String(ownerHint || "").trim();
+
+  if (!normalizedOwnerHint) {
+    return true;
+  }
+
+  const ownerKeys = [owner?.id, owner?.firebase_uid]
+    .filter(Boolean)
+    .map((value) => String(value).trim());
+
+  return ownerKeys.includes(normalizedOwnerHint);
+}
+
 async function loadOwnersByKeys(app, ownerKeys) {
   if (ownerKeys.length === 0) {
     return new Map();
@@ -257,6 +376,35 @@ async function loadOwnersByKeys(app, ownerKeys) {
   return ownersByKey;
 }
 
+async function ensureOwnedDevice(app, ownerUid, deviceId) {
+  const owner = await findOwner(app, ownerUid);
+
+  if (!owner) {
+    throw app.httpErrors.notFound("Owner user does not exist");
+  }
+
+  const ownerKeys = [...new Set([owner.id, owner.firebase_uid].filter(Boolean))];
+  const { data: device, error } = await app.supabase
+    .from("devices")
+    .select("device_id, owner_uid, name, description, status")
+    .eq("device_id", deviceId)
+    .in("owner_uid", ownerKeys)
+    .maybeSingle();
+
+  if (error) {
+    throw app.httpErrors.internalServerError(error.message);
+  }
+
+  if (!device) {
+    throw app.httpErrors.notFound("Device not found");
+  }
+
+  return {
+    device,
+    owner,
+  };
+}
+
 async function devicesRoutes(app) {
   app.get(
     "/",
@@ -303,8 +451,9 @@ async function devicesRoutes(app) {
     },
     async (request) => {
       ensureDb(app);
+      const decodedToken = await verifyFirebaseUser(app, request);
 
-      const owner = await findOwner(app, request.query.ownerUid);
+      const owner = await findOwner(app, decodedToken.uid);
 
       if (!owner) {
         throw app.httpErrors.notFound("Owner user does not exist");
@@ -339,6 +488,83 @@ async function devicesRoutes(app) {
 
       return {
         devices: Array.from(devicesById.values()),
+      };
+    }
+  );
+
+  app.get(
+    "/:deviceId/history",
+    {
+      schema: {
+        tags: ["Devices"],
+        summary: "Fetch historical telemetry for a device",
+        params: deviceIdParamSchema,
+        querystring: deviceHistoryQuerySchema,
+        response: {
+          200: {
+            type: "object",
+            properties: {
+              deviceId: { type: "string" },
+              samples: {
+                type: "array",
+                items: deviceHistorySampleSchema,
+              },
+            },
+          },
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (request) => {
+      ensureDb(app);
+      const decodedToken = await verifyFirebaseUser(app, request);
+
+      const { deviceId } = request.params;
+      const { start, end, limit } = request.query;
+      const { owner } = await ensureOwnedDevice(app, decodedToken.uid, deviceId);
+      const canonicalOwnerUid = owner.firebase_uid || owner.id;
+
+      let query = app.supabase
+        .from("device_history")
+        .select(
+          "device_id, owner_uid, owner_firebase_uid, captured_at, source_updated_at, sample_interval_start, no2, sound_level, particulate_matter_level, temperature, humidity, raw_payload"
+        )
+        .eq("device_id", deviceId)
+        .eq("owner_uid", canonicalOwnerUid);
+
+      if (start) {
+        query = query.gte("sample_interval_start", start);
+      }
+
+      if (end) {
+        query = query.lte("sample_interval_start", end);
+      }
+
+      const { data, error } = await query
+        .order("sample_interval_start", { ascending: false })
+        .limit(clampHistoryLimit(limit));
+
+      if (error) {
+        throw app.httpErrors.internalServerError(error.message);
+      }
+
+      return {
+        deviceId,
+        samples: (data || []).map((sample) => ({
+          deviceId: sample.device_id,
+          ownerUid: sample.owner_uid,
+          ownerFirebaseUid: sample.owner_firebase_uid,
+          capturedAt: sample.captured_at,
+          sourceUpdatedAt: sample.source_updated_at,
+          sampleIntervalStart: sample.sample_interval_start,
+          no2: sample.no2,
+          soundLevel: sample.sound_level,
+          particulateMatterLevel: sample.particulate_matter_level,
+          temperature: sample.temperature,
+          humidity: sample.humidity,
+          rawPayload: sample.raw_payload,
+        })),
       };
     }
   );
@@ -457,7 +683,7 @@ async function devicesRoutes(app) {
     reply.code(201);
     return {
       deviceId,
-      deviceSecret,
+      deviceSecret: createProvisioningSecret(owner.firebase_uid || owner.id, deviceSecret),
     };
   }
 
@@ -475,7 +701,11 @@ async function devicesRoutes(app) {
         },
       },
     },
-    async (request, reply) => claimDevice(request.query.ownerUid, "", "", reply)
+    async (request, reply) => {
+      const decodedToken = await verifyFirebaseUser(app, request);
+
+      return claimDevice(decodedToken.uid, "", "", reply);
+    }
   );
 
   app.post(
@@ -492,13 +722,16 @@ async function devicesRoutes(app) {
         },
       },
     },
-    async (request, reply) =>
-      claimDevice(
-        request.body.ownerUid,
+    async (request, reply) => {
+      const decodedToken = await verifyFirebaseUser(app, request);
+
+      return claimDevice(
+        decodedToken.uid,
         request.body.name.trim(),
         request.body.description.trim(),
         reply
-      )
+      );
+    }
   );
 
   app.post(
@@ -522,10 +755,11 @@ async function devicesRoutes(app) {
       ensureFirebase(app);
 
       const { deviceId, deviceSecret } = request.body;
+      const parsedSecret = parseProvisioningSecret(deviceSecret);
 
       const { data: device, error } = await app.supabase
         .from("devices")
-        .select("device_id, device_code_hash, status")
+        .select("device_id, device_code_hash, status, owner_uid")
         .eq("device_id", deviceId)
         .maybeSingle();
 
@@ -541,15 +775,29 @@ async function devicesRoutes(app) {
         throw app.httpErrors.forbidden("Device is not active");
       }
 
-      if (!verifySecret(deviceSecret, device.device_code_hash)) {
+      if (!verifySecret(parsedSecret.rawSecret, device.device_code_hash)) {
         throw app.httpErrors.unauthorized("Invalid device credentials");
       }
 
+      const owner = await findOwnerByDeviceOwnerKey(app, device.owner_uid);
+
+      if (!owner?.firebase_uid) {
+        throw app.httpErrors.forbidden("Device owner is not configured for Firebase access");
+      }
+
+      if (!ownerMatchesHint(owner, parsedSecret.ownerHint)) {
+        throw app.httpErrors.unauthorized("Invalid device credentials");
+      }
+
+      const firebaseRootPath = `/users/${owner.firebase_uid}`;
+      const firebaseDevicePath = `${firebaseRootPath}/devices/${device.device_id}`;
       const firebaseUid = `device:${device.device_id}`;
       const claims = {
         role: "device",
         device_id: device.device_id,
-        rtdb_prefix: `/devices/${device.device_id}`,
+        owner_uid: owner.firebase_uid,
+        rtdb_prefix: firebaseRootPath,
+        device_rtdb_prefix: firebaseDevicePath,
       };
 
       const firebaseCustomToken = await app.firebaseAuth.createCustomToken(
@@ -561,6 +809,9 @@ async function devicesRoutes(app) {
         firebaseCustomToken,
         firebaseUid,
         deviceId: device.device_id,
+        ownerFirebaseUid: owner.firebase_uid,
+        firebaseRootPath,
+        firebaseDevicePath,
       };
     }
   );
@@ -581,8 +832,10 @@ async function devicesRoutes(app) {
     },
     async (request) => {
       ensureDb(app);
+      const decodedToken = await verifyFirebaseUser(app, request);
 
       const { deviceId } = request.params;
+      await ensureOwnedDevice(app, decodedToken.uid, deviceId);
       const revokedAt = new Date().toISOString();
 
       const { data: device, error } = await app.supabase
@@ -630,6 +883,7 @@ async function devicesRoutes(app) {
         tags: ["Devices"],
         summary: "Delete a device",
         params: deviceIdParamSchema,
+        querystring: deleteDeviceQuerySchema,
         response: {
           204: { description: "Device deleted successfully." },
           404: errorSchema,
@@ -639,13 +893,22 @@ async function devicesRoutes(app) {
     },
     async (request, reply) => {
       ensureDb(app);
+      const decodedToken = await verifyFirebaseUser(app, request);
 
       const { deviceId } = request.params;
+      const owner = await findOwner(app, decodedToken.uid);
+
+      if (!owner) {
+        throw app.httpErrors.notFound("Owner user does not exist");
+      }
+
+      const ownerKeys = [...new Set([owner.id, owner.firebase_uid].filter(Boolean))];
 
       const { data: deletedDevice, error } = await app.supabase
         .from("devices")
         .delete()
         .eq("device_id", deviceId)
+        .in("owner_uid", ownerKeys)
         .select("device_id")
         .maybeSingle();
 

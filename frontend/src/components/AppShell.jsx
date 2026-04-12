@@ -7,7 +7,8 @@ import { useState } from "react"
 import { signOut } from "firebase/auth"
 import { NavLink, Outlet } from "react-router-dom"
 import { useAuth } from "../components/AuthContext"
-import { auth } from "../lib/firebase"
+import RegisteredDeviceSync from "./RegisteredDeviceSync"
+import { auth } from "../lib/firebase-auth"
 import { cn } from "../lib/utils"
 
 function AppShell() {
@@ -152,6 +153,7 @@ function AppShell() {
       </aside>
 
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[38px] py-[26px] max-[900px]:p-[18px]">
+        <RegisteredDeviceSync />
         <header className="pointer-events-none mb-0 flex h-0 items-center justify-end">
           <NavLink
             className="pointer-events-auto fixed right-7 top-6 z-40 flex size-10 items-center justify-center rounded-full border border-[var(--border)] bg-[#161d2a] text-[0.78rem] font-semibold text-[var(--muted)] no-underline shadow-[0_14px_30px_rgba(0,0,0,0.28)] transition-colors hover:border-[#3a455d] hover:text-[var(--text)] max-[900px]:right-[18px] max-[900px]:top-[18px] max-[900px]:size-9"

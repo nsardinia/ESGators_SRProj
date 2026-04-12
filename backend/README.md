@@ -42,6 +42,9 @@ Optional MWBE sync config:
 - `MWBE_SYNC_INTERVAL_MS`
 - `MWBE_SYNC_ON_START`
 
+For local development, the `mwbe` service now exposes a compatibility feed at
+`GET /api/sensors/latest`, which matches the example backend config below.
+
 Optional Firebase RTDB sync config:
 - `FIREBASE_SERVICE_ACCOUNT_JSON`
 - `FIREBASE_DATABASE_URL`
@@ -204,6 +207,8 @@ Samples in red are marked as `critical`.
 - `GET /iot/metrics`: Prometheus scrape endpoint
 - `GET /iot/export/:range`: CSV export for `day`, `week`, or `month`
 - `GET /firebase/status`: Firebase sync config and last sync state
+- `GET /mcp/status`: devices-page MCP assistant configuration status
+- `POST /mcp/ask`: ask a natural-language question through OpenAI with your hosted MCP server attached as a tool
 - `GET /firebase/preview/:deviceId`: raw Firebase payload plus normalized Prometheus samples
 - `POST /firebase/sync`: sync all Firebase devices or one device via `deviceId`
 - `POST /firebase/sync/:deviceId`: sync one Firebase device into Prometheus metrics
@@ -234,6 +239,16 @@ curl -X POST http://localhost:5000/iot/data \
   -H "Content-Type: application/json" \
   -d '{"sensor_id":"sensor-1","metric_type":"temperature","value":31.2,"source":"manual"}'
 ```
+
+Devices-page MCP assistant example:
+
+```bash
+curl -X POST http://localhost:5000/mcp/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"Which device needs attention right now?","deviceIds":["dev_123","dev_456"],"selectedDeviceId":"dev_123"}'
+```
+
+This route requires `OPENAI_API_KEY` and `OPENAI_MCP_SERVER_URL` in `backend/.env`.
 
 Runtime threshold update example:
 

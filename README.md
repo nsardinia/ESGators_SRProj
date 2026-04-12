@@ -5,9 +5,9 @@ ESGators is a full-stack demo that connects IoT-based ESG monitoring with dashbo
 ## Repository Overview
 
 - `frontend/`: React app for authentication, dashboard flows, node views, and Kalshi demo trading
-- `backend/`: Express API for IoT ingest, ESG scoring, CSV export, Grafana integration, and Kalshi routes
-- `mwbe/`: Fastify service used for supporting API experiments
-- `hardware scripts/`: device provisioning and hardware-side helpers
+- `backend/`: Express API for ESG scoring, CSV export, Grafana integration, and Kalshi routes.
+- `mwbe/`: IoT device and user management, Real-time data handline, and administration. 
+- `hardware scripts/`: Hardware code for the arduino devices (C++)
 
 ## Use Cases
 

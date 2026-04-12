@@ -5,32 +5,35 @@
  *
  * Last Edit: Nicholas Sardinia, 3/1/2026
  */
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import Button from "../components/ui/button"
 import { Card, CardContent } from "../components/ui/card"
+import DeviceMcpAssistant from "../components/DeviceMcpAssistant"
 import Input from "../components/ui/input"
 import Textarea from "../components/ui/textarea"
 import { useAuth } from "../components/AuthContext"
 import useOwnedNodes from "../hooks/useOwnedNodes"
-import { MWBE_API_BASE_URL } from "../lib/api"
+import { API_BASE_URL, MWBE_API_BASE_URL, getAuthHeaders } from "../lib/api"
 import "./NodeMapPage.css"
 
-function formatRawDeviceData(telemetry) {
-  if (!telemetry) {
+function formatLastUpdate(updatedAtMs) {
+  if (typeof updatedAtMs !== "number") {
     return "Waiting for telemetry"
   }
 
-  return JSON.stringify(telemetry)
+  return new Date(updatedAtMs).toLocaleString()
 }
 
 function NodeMapPage() {
   const { user } = useAuth()
   const [isFormOpen, setIsFormOpen] = useState(false)
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false)
   const [createdSecret, setCreatedSecret] = useState(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [deletingNodeId, setDeletingNodeId] = useState("")
   const { createdNodes, error, loadingNodes, warning, setError, syncOwner, reloadNodes } = useOwnedNodes(user)
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
@@ -77,15 +80,14 @@ function NodeMapPage() {
     setError("")
 
     try {
-      const owner = await syncOwner()
+      await syncOwner()
 
-      const response = await fetch(`${MWBE_API_BASE_URL}/devices/claim`, {
+      const response = await fetch(`${API_BASE_URL}/devices/claim`, {
         method: "POST",
-        headers: {
+        headers: await getAuthHeaders(user, {
           "Content-Type": "application/json",
-        },
+        }),
         body: JSON.stringify({
-          ownerUid: owner.firebase_uid,
           name: name.trim(),
           description: description.trim(),
         }),
@@ -110,6 +112,56 @@ function NodeMapPage() {
       setSubmitting(false)
     }
   }
+
+  const handleDeleteNode = async (node) => {
+    if (!user?.uid) {
+      setError("You must be signed in to delete a node.")
+      return
+    }
+
+    const shouldDelete = window.confirm(`Delete ${node.name}? This will permanently remove it from your nodes.`)
+
+    if (!shouldDelete) {
+      return
+    }
+
+    setDeletingNodeId(node.id)
+    setError("")
+
+    try {
+      await syncOwner()
+      const response = await fetch(`${API_BASE_URL}/devices/${encodeURIComponent(node.id)}`, {
+        method: "DELETE",
+        headers: await getAuthHeaders(user),
+      })
+
+      if (response.status !== 204) {
+        const payload = await response.json().catch(() => ({}))
+        throw new Error(payload.message || "Failed to delete node")
+      }
+
+      await reloadNodes()
+    } catch (requestError) {
+      setError(requestError.message || "Failed to delete node")
+    } finally {
+      setDeletingNodeId("")
+    }
+  }
+
+  useEffect(() => {
+    if (!isAssistantOpen) {
+      return undefined
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setIsAssistantOpen(false)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [isAssistantOpen])
 
   return (
     <section className="node-map-page">
@@ -162,7 +214,18 @@ function NodeMapPage() {
 
           {filteredNodes.map((node) => (
             <article key={node.id} className="node-card-created">
-              <p className="mb-2 text-base font-bold text-[#effbf4]">{node.name}</p>
+              <div className="node-card-header">
+                <p className="mb-2 text-base font-bold text-[#effbf4]">{node.name}</p>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  disabled={submitting || deletingNodeId === node.id}
+                  onClick={() => handleDeleteNode(node)}
+                >
+                  {deletingNodeId === node.id ? "Deleting..." : "Delete"}
+                </Button>
+              </div>
               <p className="mb-[14px] leading-[1.5] text-[#b8dec9]">{node.description}</p>
               <dl className="node-credentials">
                 <div>
@@ -175,7 +238,7 @@ function NodeMapPage() {
                 </div>
                 <div>
                   <dt className="mb-1 text-[0.72rem] uppercase tracking-[0.08em] text-[#b4c2d8]">Last Update</dt>
-                  <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{formatRawDeviceData(node.telemetry)}</dd>
+                      <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{formatLastUpdate(node.updatedAtMs)}</dd>
                 </div>
                 {node.telemetry && (
                   <>
@@ -200,6 +263,15 @@ function NodeMapPage() {
 
         <Button type="button" className="add-node size-11 rounded-full p-0 text-[30px] leading-none" onClick={handleOpenForm} aria-label="Create node">
           +
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          className="open-assistant"
+          onClick={() => setIsAssistantOpen(true)}
+          aria-label="Open device assistant"
+        >
+          <span className="open-assistant-badge" aria-hidden="true">AI</span>
         </Button>
       </div>
 
@@ -298,6 +370,30 @@ function NodeMapPage() {
               </div>
             </CardContent>
           </Card>
+        </div>
+      )}
+
+      {isAssistantOpen && (
+        <div className="node-modal-backdrop" role="presentation" onClick={() => setIsAssistantOpen(false)}>
+          <div
+            className="assistant-modal-shell"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="device-assistant-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="assistant-modal-header">
+              <div>
+                <p id="device-assistant-title" className="mb-1 text-[0.78rem] font-semibold uppercase tracking-[0.12em] text-[#93c5fd]">
+                  Device Assistant
+                </p>
+              </div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setIsAssistantOpen(false)}>
+                Close
+              </Button>
+            </div>
+            <DeviceMcpAssistant nodes={createdNodes} />
+          </div>
         </div>
       )}
     </section>

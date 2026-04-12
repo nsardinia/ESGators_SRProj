@@ -1,0 +1,13 @@
+site_name: ESGators Documentation
+site_description: Project documentation for the ESGators backend API and frontend architecture
+repo_name: ESGators_SRProj
+docs_dir: docs
+theme:
+  name: readthedocs
+  navigation_depth: 3
+extra_css:
+  - stylesheets/extra.css
+nav:
+  - Home: index.md
+  - Backend API: backend-api.md
+  - Frontend Structure: frontend-structure.md

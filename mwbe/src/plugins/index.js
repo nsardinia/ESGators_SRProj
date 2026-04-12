@@ -10,6 +10,7 @@ const sensible = require("@fastify/sensible");
 const registerSwagger = require("./swagger");
 const registerSupabase = require("./supabase");
 const registerFirebase = require("./firebase");
+const registerDeviceHistory = require("../services/deviceHistory");
 
 function buildCorsOrigin() {
   const configuredOrigin = process.env.CORS_ORIGIN;
@@ -53,6 +54,7 @@ function registerPlugins(app) {
   });
   registerSupabase(app);
   registerFirebase(app);
+  registerDeviceHistory(app);
   registerGrafanaMetrics(app);
 }
 

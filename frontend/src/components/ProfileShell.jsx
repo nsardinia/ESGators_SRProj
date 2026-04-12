@@ -5,7 +5,7 @@
  */
 import { signOut } from "firebase/auth"
 import { NavLink, Outlet } from "react-router-dom"
-import { auth } from "../lib/firebase"
+import { auth } from "../lib/firebase-auth"
 import Button from "./ui/button"
 import { cn } from "../lib/utils"
 

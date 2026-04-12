@@ -1,15 +1,19 @@
 import { renderHook, waitFor } from "@testing-library/react"
 import useOwnedNodes from "./useOwnedNodes"
 
-const mockGet = vi.fn()
-const mockRef = vi.fn((database, path) => ({ database, path }))
+const { mockGetDatabase, mockOnValue, mockRef } = vi.hoisted(() => ({
+  mockGetDatabase: vi.fn(() => ({ name: "test-database" })),
+  mockOnValue: vi.fn(),
+  mockRef: vi.fn((database, path) => ({ database, path })),
+}))
 
-vi.mock("../lib/firebase", () => ({
-  database: { name: "test-database" },
+vi.mock("../lib/firebase-core", () => ({
+  firebaseApp: { name: "test-app" },
 }))
 
 vi.mock("firebase/database", () => ({
-  get: (...args) => mockGet(...args),
+  getDatabase: (...args) => mockGetDatabase(...args),
+  onValue: (...args) => mockOnValue(...args),
   ref: (...args) => mockRef(...args),
 }))
 
@@ -18,8 +22,9 @@ describe("useOwnedNodes", () => {
 
   afterEach(() => {
     global.fetch = originalFetch
-    mockGet.mockReset()
+    mockOnValue.mockReset()
     mockRef.mockClear()
+    mockGetDatabase.mockClear()
   })
 
   it("keeps loaded nodes visible when Firebase telemetry cannot be read", async () => {
@@ -37,7 +42,7 @@ describe("useOwnedNodes", () => {
         }
       }
 
-      if (normalizedUrl.includes("/devices/owned?")) {
+      if (normalizedUrl.includes("/devices/owned")) {
         return {
           ok: true,
           json: async () => ({
@@ -56,12 +61,16 @@ describe("useOwnedNodes", () => {
       throw new Error(`Unhandled fetch URL: ${normalizedUrl}`)
     })
 
-    mockGet.mockRejectedValue(new Error("Permission denied"))
+    mockOnValue.mockImplementation((reference, handleValue, handleError) => {
+      handleError(new Error("Permission denied"))
+      return vi.fn()
+    })
 
     const user = {
       uid: "firebase-user-1",
       email: "owner@example.com",
       displayName: "Owner",
+      getIdToken: vi.fn(async () => "test-token"),
     }
 
     const { result } = renderHook(() => useOwnedNodes(user))

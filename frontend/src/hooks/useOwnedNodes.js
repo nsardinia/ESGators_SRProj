@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
-import { get, ref } from "firebase/database"
-import { MWBE_API_BASE_URL } from "../lib/api"
-import { database } from "../lib/firebase"
+import { onValue, ref } from "firebase/database"
+import { API_BASE_URL, MWBE_API_BASE_URL, getAuthHeaders } from "../lib/api"
+import { database } from "../lib/firebase-database"
 
 function mapOwnedDevice(device, previousNode) {
   return {
@@ -14,11 +14,54 @@ function mapOwnedDevice(device, previousNode) {
   }
 }
 
+function collectUpdatedAtValues(value, acc = []) {
+  if (!value || typeof value !== "object") {
+    return acc
+  }
+
+  if (typeof value.updatedAtMs === "number") {
+    acc.push(value.updatedAtMs)
+  }
+
+  if (typeof value.eventAtMs === "number") {
+    acc.push(value.eventAtMs)
+  }
+
+  Object.values(value).forEach((child) => {
+    if (child && typeof child === "object") {
+      collectUpdatedAtValues(child, acc)
+    }
+  })
+
+  return acc
+}
+
+function deriveNodeStatus(telemetry, fallbackStatus) {
+  return (
+    telemetry?.latest?.status ||
+    telemetry?.readings?.latest?.status ||
+    telemetry?.readings?.status ||
+    telemetry?.gatewayReadings?.latest?.status ||
+    fallbackStatus
+  )
+}
+
+function deriveUpdatedAtMs(telemetry) {
+  const values = collectUpdatedAtValues(telemetry)
+
+  if (values.length === 0) {
+    return null
+  }
+
+  return Math.max(...values)
+}
+
 function useOwnedNodes(user) {
   const [loadingNodes, setLoadingNodes] = useState(false)
   const [error, setError] = useState("")
   const [warning, setWarning] = useState("")
   const [createdNodes, setCreatedNodes] = useState([])
+  const [owner, setOwner] = useState(null)
 
   const syncOwner = useCallback(async () => {
     const ownerResponse = await fetch(`${MWBE_API_BASE_URL}/users`, {
@@ -42,15 +85,18 @@ function useOwnedNodes(user) {
       )
     }
 
+    setOwner(ownerPayload.user)
     return ownerPayload.user
   }, [user])
 
-  const loadOwnedNodes = useCallback(async (ownerFirebaseUid) => {
+  const loadOwnedNodes = useCallback(async () => {
     setLoadingNodes(true)
 
     try {
-      const params = new URLSearchParams({ ownerUid: ownerFirebaseUid })
-      const response = await fetch(`${MWBE_API_BASE_URL}/devices/owned?${params.toString()}`)
+      setWarning("")
+      const response = await fetch(`${API_BASE_URL}/devices/owned`, {
+        headers: await getAuthHeaders(user),
+      })
       const payload = await response.json().catch(() => ({}))
 
       if (!response.ok) {
@@ -72,27 +118,26 @@ function useOwnedNodes(user) {
     } finally {
       setLoadingNodes(false)
     }
-  }, [])
+  }, [user])
 
   const reloadNodes = useCallback(async () => {
     if (!user?.uid || !user.email) {
       setCreatedNodes([])
-      setError("")
       setWarning("")
+      setOwner(null)
       return
     }
 
     setError("")
-    setWarning("")
-    const owner = await syncOwner()
-    await loadOwnedNodes(owner.firebase_uid)
+    await syncOwner()
+    await loadOwnedNodes()
   }, [loadOwnedNodes, syncOwner, user])
 
   useEffect(() => {
     if (!user?.uid || !user.email) {
       setCreatedNodes([])
-      setError("")
       setWarning("")
+      setOwner(null)
       return
     }
 
@@ -124,65 +169,52 @@ function useOwnedNodes(user) {
     .join("|")
 
   useEffect(() => {
-    if (!database || createdNodes.length === 0) {
+    if (!database || createdNodes.length === 0 || !owner?.firebase_uid) {
       return undefined
     }
 
-    let ignore = false
+    const unsubscribes = createdNodes.map((node) =>
+      onValue(
+        ref(database, `users/${owner.firebase_uid}/devices/${node.id}`),
+        (snapshot) => {
+          const telemetry = snapshot.val()
 
-    const loadDeviceData = async () => {
-      try {
-        const snapshots = await Promise.all(
-          createdNodes.map((node) => get(ref(database, `devices/${node.id}`)))
-        )
+          setWarning("")
 
-        if (ignore) {
-          return
+          setCreatedNodes((currentNodes) =>
+            currentNodes.map((currentNode) => {
+              if (currentNode.id !== node.id) {
+                return currentNode
+              }
+
+              return {
+                ...currentNode,
+                telemetry,
+                status: deriveNodeStatus(telemetry, currentNode.status),
+                updatedAtMs: deriveUpdatedAtMs(telemetry),
+              }
+            })
+          )
+        },
+        () => {
+          setWarning("Live telemetry is unavailable right now.")
         }
-
-        setCreatedNodes((currentNodes) =>
-          currentNodes.map((currentNode) => {
-            const snapshotIndex = createdNodes.findIndex((node) => node.id === currentNode.id)
-
-            if (snapshotIndex === -1) {
-              return currentNode
-            }
-
-            const telemetry = snapshots[snapshotIndex].val()
-
-            return {
-              ...currentNode,
-              telemetry,
-              status: telemetry?.latest?.status || currentNode.status,
-              updatedAtMs:
-                typeof telemetry?.latest?.updatedAtMs === "number"
-                  ? telemetry.latest.updatedAtMs
-                  : null,
-            }
-          })
-        )
-        setWarning("")
-      } catch {
-        if (!ignore) {
-          setWarning("Live telemetry is unavailable right now. Showing node records from MWBE only.")
-        }
-      }
-    }
-
-    loadDeviceData()
+      )
+    )
 
     return () => {
-      ignore = true
+      unsubscribes.forEach((unsubscribe) => unsubscribe())
     }
-  }, [createdNodeIds])
+  }, [createdNodeIds, owner?.firebase_uid])
 
   return {
     createdNodes,
     error,
     loadingNodes,
-    warning,
+    owner,
     setCreatedNodes,
     setError,
+    warning,
     syncOwner,
     reloadNodes,
   }

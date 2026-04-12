@@ -14,7 +14,8 @@ import { Card, CardContent } from "../components/ui/card"
 import Button from "../components/ui/button"
 import Input from "../components/ui/input"
 import { API_BASE_URL } from "../lib/api"
-import { auth, isFirebaseConfigured, notifyFirebaseConfigError } from "../lib/firebase"
+import { auth } from "../lib/firebase-auth"
+import { isFirebaseConfigured, notifyFirebaseConfigError } from "../lib/firebase-core"
 
 function AuthPage() {
   const { user, loading } = useAuth()

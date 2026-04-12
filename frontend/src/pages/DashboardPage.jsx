@@ -94,15 +94,15 @@ const DashboardPage = () => {
   }
 
   return (
-    <section className="max-w-[940px]">
+    <section className="max-w-[1180px]">
       <p className="mb-[10px] pt-2 text-base font-bold uppercase tracking-[0.08em] text-[var(--muted)]">
         Dashboard
       </p>
       <h1 className="mb-2 text-[clamp(1.4rem,2.4vw,2rem)] font-semibold text-[var(--text)]">
-        Data Export
+        Monitoring And Export
       </h1>
       <p className="mb-[18px] text-base font-medium leading-7 text-[var(--muted)]">
-        Download CSV exports for day, week, or month. If the database is empty, fallback TH sample data will be downloaded.
+        Review your live Grafana panels without leaving the app, then export day, week, or month CSV snapshots as needed.
       </p>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -133,17 +133,20 @@ const DashboardPage = () => {
           <p className={cardLabelClassName}>Grafana</p>
           <h2 className="mb-2 text-[1.05rem] font-semibold text-[var(--text)]">Monitoring dashboard</h2>
           <p className="mb-[14px] leading-7 text-[var(--muted)]">
-            Open the live Grafana dashboard in a new tab. Your current account UID/email is appended as dashboard
-            variables so panels can filter by owner.
+            Open the live Grafana dashboard in a new tab. Your current account UID and email are appended as dashboard
+            variables so panels can filter by owner. Inline embed is currently unavailable because Grafana Cloud blocks
+            framing for this dashboard.
           </p>
           {grafanaDashboardUrl ? (
-            <button
-              type="button"
-              className={secondaryButtonClassName}
-              onClick={handleOpenGrafana}
-            >
-              Open Grafana Dashboard
-            </button>
+            <div className="flex flex-wrap gap-[10px]">
+              <button
+                type="button"
+                className={secondaryButtonClassName}
+                onClick={handleOpenGrafana}
+              >
+                Open Grafana Dashboard
+              </button>
+            </div>
           ) : (
             <p className="mt-[14px] text-[0.92rem] text-[#f9b4b4]">
               Set <strong>VITE_GRAFANA_DASHBOARD_URL</strong> in <strong>frontend/.env</strong>.
