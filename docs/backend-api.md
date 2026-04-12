@@ -142,6 +142,7 @@ Important behavior:
 
 - device ownership accepts either a Firebase UID or database UUID for `ownerUid`
 - claimed devices are stored with a hashed secret, not a raw secret
+- claimed `deviceSecret` values may include an embedded owner hint, but devices still submit that same single secret during provisioning
 - provisioning returns a Firebase custom token plus owner-scoped Realtime Database paths
 - history queries support `start`, `end`, and `limit`
 

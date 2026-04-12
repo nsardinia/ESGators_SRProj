@@ -1,6 +1,8 @@
 node_modules/
+.venv/
 firebase-key.json
 .env
+backend/.env
 firebaseServiceKeys.json
 .history/
 frontend/.history/

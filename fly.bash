@@ -1,0 +1,15 @@
+set -a
+source backend/.env
+set +a
+
+fly secrets set -a your-mcp-app-name-winter-thunder-1708 \
+  MCP_BACKEND_BASE_URL=https://backend-bitter-morning-1805.fly.dev \
+  SUPABASE_URL="$SUPABASE_URL" \
+  SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
+  FIREBASE_DATABASE_URL="$FIREBASE_DATABASE_URL" \
+  FIREBASE_PROJECT_ID="$FIREBASE_PROJECT_ID" \
+  FIREBASE_DEVICE_ROOT_PATH="$FIREBASE_DEVICE_ROOT_PATH" \
+  MCP_TRANSPORT=streamable-http \
+  MCP_HOST=0.0.0.0 \
+  MCP_PORT=8000 \
+  MCP_PATH=/mcp

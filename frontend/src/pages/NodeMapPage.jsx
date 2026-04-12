@@ -5,9 +5,10 @@
  *
  * Last Edit: Nicholas Sardinia, 3/1/2026
  */
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import Button from "../components/ui/button"
 import { Card, CardContent } from "../components/ui/card"
+import DeviceMcpAssistant from "../components/DeviceMcpAssistant"
 import Input from "../components/ui/input"
 import Textarea from "../components/ui/textarea"
 import { useAuth } from "../components/AuthContext"
@@ -26,6 +27,7 @@ function formatLastUpdate(updatedAtMs) {
 function NodeMapPage() {
   const { user } = useAuth()
   const [isFormOpen, setIsFormOpen] = useState(false)
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false)
   const [createdSecret, setCreatedSecret] = useState(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [name, setName] = useState("")
@@ -146,6 +148,21 @@ function NodeMapPage() {
     }
   }
 
+  useEffect(() => {
+    if (!isAssistantOpen) {
+      return undefined
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setIsAssistantOpen(false)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [isAssistantOpen])
+
   return (
     <section className="node-map-page">
       <p className="mb-[10px] pt-2 text-base font-bold uppercase tracking-[0.08em] text-[var(--muted)]">Your Sensor Nodes</p>
@@ -241,6 +258,15 @@ function NodeMapPage() {
 
         <Button type="button" className="add-node size-11 rounded-full p-0 text-[30px] leading-none" onClick={handleOpenForm} aria-label="Create node">
           +
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          className="open-assistant"
+          onClick={() => setIsAssistantOpen(true)}
+          aria-label="Open device assistant"
+        >
+          <span className="open-assistant-badge" aria-hidden="true">AI</span>
         </Button>
       </div>
 
@@ -339,6 +365,30 @@ function NodeMapPage() {
               </div>
             </CardContent>
           </Card>
+        </div>
+      )}
+
+      {isAssistantOpen && (
+        <div className="node-modal-backdrop" role="presentation" onClick={() => setIsAssistantOpen(false)}>
+          <div
+            className="assistant-modal-shell"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="device-assistant-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="assistant-modal-header">
+              <div>
+                <p id="device-assistant-title" className="mb-1 text-[0.78rem] font-semibold uppercase tracking-[0.12em] text-[#93c5fd]">
+                  Device Assistant
+                </p>
+              </div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setIsAssistantOpen(false)}>
+                Close
+              </Button>
+            </div>
+            <DeviceMcpAssistant nodes={createdNodes} />
+          </div>
         </div>
       )}
     </section>

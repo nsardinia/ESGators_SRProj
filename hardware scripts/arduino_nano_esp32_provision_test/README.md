@@ -6,6 +6,7 @@ This sketch performs the full device bootstrap flow:
 - Request body:
   - `deviceId`
   - `deviceSecret`
+- `deviceSecret` is still a single value; newer claimed secrets may include embedded owner info so the device does not need a separate owner env var
 - Success response:
   - `firebaseCustomToken`
   - `firebaseUid`
