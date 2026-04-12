@@ -120,6 +120,22 @@ function AppShell() {
               Hardware
             </span>
           </NavLink>
+          <NavLink
+            to="/app/kalshi"
+            className={({ isActive }) =>
+              cn(
+                "flex items-center gap-3 rounded-[9px] px-3 py-2.5 text-left text-[0.95rem] text-[var(--muted)] no-underline transition-colors hover:bg-[#1b2434] hover:text-[var(--text)]",
+                isActive && "bg-[var(--accent-soft)] text-[var(--text)] shadow-[inset_0_0_0_1px_rgba(62,207,142,0.38)]"
+              )
+            }
+          >
+            <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-[8px] border border-[#2d3749] bg-[#121927] text-[0.75rem] font-bold text-[#b6c2d4]">
+              K
+            </span>
+            <span className={cn("whitespace-nowrap transition-all max-[900px]:pointer-events-auto max-[900px]:translate-x-0 max-[900px]:opacity-100", !sidebarExpanded && "pointer-events-none -translate-x-1 opacity-0")}>
+              Kalshi
+            </span>
+          </NavLink>
         </nav>
         <button
           type="button"

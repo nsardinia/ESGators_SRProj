@@ -22,6 +22,7 @@ const PreferencesPage = lazy(() => import("./pages/profile/PreferencesPage"))
 const BillingPage = lazy(() => import("./pages/profile/BillingPage"))
 const SecurityPage = lazy(() => import("./pages/profile/SecurityPage"))
 const HardwarePage = lazy(() => import("./pages/HardwarePage"))
+const KalshiPage = lazy(() => import("./pages/KalshiPage"))
 
 function RouteLoader() {
   return (
@@ -69,6 +70,7 @@ function App() {
             <Route path="node-map" element={<LazyRoute><NodeMapPage /></LazyRoute>} />
             <Route path="global-node-map" element={<LazyRoute><GlobalNodeMap /></LazyRoute>} />
             <Route path="hardware" element={<LazyRoute><HardwarePage /></LazyRoute>} />
+            <Route path="kalshi" element={<LazyRoute><KalshiPage /></LazyRoute>} />
             <Route path="configuration" element={<LazyRoute><ConfigurationPage /></LazyRoute>} />
             <Route index element={<Navigate to="dashboard" replace />} />
           </Route>

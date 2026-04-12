@@ -1,6 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import DashboardPage from "./DashboardPage"
 
+vi.mock("../components/AuthContext", () => ({
+  useAuth: () => ({ user: null }),
+}))
+
 describe("DashboardPage", () => {
   it("opens Grafana only when the user clicks the button", () => {
     const dashboardUrl = "https://grafana.example.test/dashboard"

@@ -54,6 +54,16 @@ Optional Firebase RTDB sync config:
 - `FIREBASE_SYNC_INTERVAL_MS`
 - `FIREBASE_SYNC_ON_START`
 
+Optional Kalshi API config:
+- `KALSHI_ENVIRONMENT` (`production` or `demo`)
+- `KALSHI_API_BASE_URL`
+- `KALSHI_API_KEY_ID`
+- `KALSHI_PRIVATE_KEY_PATH`
+- `KALSHI_PRIVATE_KEY_PEM`
+- `KALSHI_PRIVATE_KEY_PEM_BASE64`
+- `KALSHI_API_TIMEOUT_MS`
+- `KALSHI_SIGN_PUBLIC_REQUESTS`
+
 If no Firebase env vars are set, the backend falls back to:
 - project id `senior-project-esgators`
 - RTDB URL `https://senior-project-esgators-default-rtdb.firebaseio.com`
@@ -98,6 +108,10 @@ VITE_FIREBASE_PROJECT_ID=senior-project-esgators
 FIREBASE_DEVICE_ROOT_PATH=devices
 FIREBASE_SOURCE_NAME=firebase-rtdb
 
+KALSHI_ENVIRONMENT=demo
+KALSHI_API_KEY_ID=your-demo-api-key-id
+KALSHI_PRIVATE_KEY_PATH=./kalshi-api.key
+
 SENSOR_THRESHOLDS_JSON={"temperature":{"min":18,"max":28},"humidity":{"min":30,"max":60}}
 ```
 
@@ -118,7 +132,14 @@ npm run dev
 
 ### Sensor export
 
-`POST /iot/data` stores sensor samples in Supabase table `sensor_readings`.
+`GET /iot/export/:range` now checks data in this order:
+- `sensor_readings` rows from Supabase, if that table is available
+- recent in-memory samples kept by the backend process
+- generated fallback sample data for frontend download testing
+
+The current `app.js` runtime keeps recent accepted samples in memory for ESG scoring and export, so that temporary data survives across requests but is lost on restart.
+
+If you want long-term export history from Supabase, keep using or create this table:
 
 Assumed table shape:
 
@@ -141,8 +162,7 @@ curl -L "http://localhost:5000/iot/export/week?sensor_id=sensor-a" -o sensor-rea
 curl -L "http://localhost:5000/iot/export/month?metric_type=temperature" -o sensor-readings-month.csv
 ```
 
-If Supabase has no matching rows yet, the export API returns fallback `th` sample data
-(`th-01`, `th-02` with `temperature` and `humidity`) so frontend download testing can proceed.
+If Supabase has no matching rows and the current process has no buffered samples yet, the export API returns generated fallback CSV data so frontend download testing can still proceed.
 
 ### Quick dummy test
 
@@ -182,6 +202,7 @@ Samples in red are marked as `critical`.
 ## Endpoints
 
 - `GET /iot/metrics`: Prometheus scrape endpoint
+- `GET /iot/export/:range`: CSV export for `day`, `week`, or `month`
 - `GET /firebase/status`: Firebase sync config and last sync state
 - `GET /firebase/preview/:deviceId`: raw Firebase payload plus normalized Prometheus samples
 - `POST /firebase/sync`: sync all Firebase devices or one device via `deviceId`
@@ -196,6 +217,15 @@ Samples in red are marked as `critical`.
 - `GET /mwbe/status`: current MWBE sync config and sync status
 - `PUT /mwbe/config`: update MWBE API config at runtime
 - `POST /mwbe/sync`: trigger one immediate MWBE fetch and Prometheus push
+- `GET /kalshi/status`: Kalshi API config status without secrets
+- `GET /kalshi/markets`: public Kalshi markets proxy
+- `GET /kalshi/markets/:ticker`: public Kalshi market details proxy
+- `GET /kalshi/markets/:ticker/orderbook`: public Kalshi orderbook proxy
+- `GET /kalshi/portfolio/balance`: authenticated Kalshi balance proxy
+- `GET /kalshi/portfolio/positions`: authenticated Kalshi positions proxy
+- `GET /kalshi/portfolio/orders`: authenticated Kalshi orders proxy
+- `GET /kalshi/esg/trade-plan`: build an ESG-driven demo trade plan for a market
+- `POST /kalshi/esg/trade-order`: submit the ESG-driven demo order to Kalshi demo trading
 
 Manual ingest example:
 
@@ -236,6 +266,18 @@ Manual MWBE sync example:
 ```bash
 curl -X POST http://localhost:5000/mwbe/sync
 ```
+
+Kalshi examples:
+
+```bash
+curl http://localhost:5000/kalshi/status
+curl "http://localhost:5000/kalshi/markets?status=open&limit=10"
+curl http://localhost:5000/kalshi/markets/MARKET_TICKER_FROM_RESPONSE/orderbook
+curl "http://localhost:5000/kalshi/esg/trade-plan?ticker=MARKET_TICKER_FROM_RESPONSE"
+curl http://localhost:5000/kalshi/portfolio/balance
+```
+
+Kalshi market routes work with demo mode and the public API. Portfolio routes and ESG-driven order submission additionally require the Kalshi private key.
 
 Firebase preview example:
 
@@ -482,6 +524,6 @@ Threshold definitions are also stored in English JSON here:
 - MWBE polling stays disabled until `MWBE_API_URL` is configured.
 - If Grafana credentials are missing, ingestion still works but remote write is skipped.
 - GitHub Actions runs `backend` tests on backend-related pushes and pull requests.
-- Fly.io deployment runs automatically only when `main` receives a push that changes `backend/**`.
+- Fly.io deployment runs automatically when `main` or `dev` receives a push that changes `backend/**`.
 - Set the GitHub repository secret `FLY_API_TOKEN` before expecting automatic deployment.
 - A local `git commit` alone does not deploy anything. The deployment trigger is the GitHub `push` event.
