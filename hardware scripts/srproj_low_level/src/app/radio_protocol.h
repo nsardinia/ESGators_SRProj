@@ -31,6 +31,13 @@ struct MeshPacketPayload {
   uint32_t counter;
   uint32_t uptimeMs;
   int32_t readingRaw;
+  uint8_t sensorFlags;
+  int16_t temperatureCentiC;
+  uint16_t humidityCentiPct;
+  uint16_t no2Raw;
+  uint16_t no2MilliVolts;
+  uint16_t soundRaw;
+  uint16_t soundMilliVolts;
   char deviceId[MAX_DEVICE_ID_LEN];
 };
 
@@ -42,6 +49,13 @@ struct GatewayReading {
   uint32_t counter;
   uint32_t uptimeMs;
   int32_t readingRaw;
+  uint8_t sensorFlags;
+  int16_t temperatureCentiC;
+  uint16_t humidityCentiPct;
+  uint16_t no2Raw;
+  uint16_t no2MilliVolts;
+  uint16_t soundRaw;
+  uint16_t soundMilliVolts;
   uint32_t eventAtMs;
   uint8_t uploadRetries;
   char sourceDeviceId[MAX_DEVICE_ID_LEN];
