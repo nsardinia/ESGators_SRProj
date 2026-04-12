@@ -1,22 +1,20 @@
-const NODE_LOCATION_STORAGE_KEY = "esgators-global-node-locations-v3"
+const NODE_LOCATION_STORAGE_KEY = "esgators-global-node-locations-v4"
 const ACTIVE_OWNED_NODE_STORAGE_KEY = "esgators-active-owned-node-id-v1"
 
-const GAINESVILLE_CLUSTER = {
-  label: "Gainesville, Florida (Near UF)",
-  latitude: 29.6436,
-  longitude: -82.3549,
+const GAINESVILLE_FALLBACK = {
+  latitude: 29.6516,
+  longitude: -82.3248,
+  label: "Unknown location (Gainesville, Florida fallback)",
+  isUnknown: true,
 }
 
-const SEOUL_CLUSTER = {
-  label: "Seoul, South Korea",
-  latitude: 37.5665,
-  longitude: 126.978,
+function normalizeCoordinate(value) {
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) ? numericValue : null
 }
 
-const SEOUL_OWNER_EMAILS = new Set(["nicholassardinia@ufl.edus", "nicholassardinia@ufl.edu"])
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max)
+function clampLatitude(latitude) {
+  return Math.min(Math.max(latitude, -90), 90)
 }
 
 function wrapLongitude(longitude) {
@@ -33,10 +31,33 @@ function wrapLongitude(longitude) {
   return nextLongitude
 }
 
-function hashString(value) {
-  return Array.from(String(value || "")).reduce((hash, character) => {
-    return ((hash << 5) - hash + character.charCodeAt(0)) >>> 0
-  }, 0)
+function formatCoordinateLabel(latitude, longitude) {
+  return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`
+}
+
+function normalizeStoredLocation(location) {
+  if (!location || typeof location !== "object") {
+    return null
+  }
+
+  const latitude = normalizeCoordinate(location.latitude)
+  const longitude = normalizeCoordinate(location.longitude)
+
+  if (latitude === null || longitude === null) {
+    return null
+  }
+
+  const normalizedLatitude = clampLatitude(latitude)
+  const normalizedLongitude = wrapLongitude(longitude)
+  const isUnknown = Boolean(location.isUnknown)
+  const label = String(location.label || "").trim()
+
+  return {
+    latitude: normalizedLatitude,
+    longitude: normalizedLongitude,
+    label: label || (isUnknown ? GAINESVILLE_FALLBACK.label : formatCoordinateLabel(normalizedLatitude, normalizedLongitude)),
+    isUnknown,
+  }
 }
 
 function readStoredNodeLocations() {
@@ -47,7 +68,16 @@ function readStoredNodeLocations() {
   try {
     const rawValue = window.localStorage.getItem(NODE_LOCATION_STORAGE_KEY)
     const parsed = JSON.parse(rawValue || "{}")
-    return parsed && typeof parsed === "object" ? parsed : {}
+
+    if (!parsed || typeof parsed !== "object") {
+      return {}
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([nodeId, location]) => [String(nodeId || "").trim(), normalizeStoredLocation(location)])
+        .filter(([nodeId, location]) => nodeId && location)
+    )
   } catch {
     return {}
   }
@@ -58,7 +88,30 @@ function writeStoredNodeLocations(locations) {
     return
   }
 
-  window.localStorage.setItem(NODE_LOCATION_STORAGE_KEY, JSON.stringify(locations))
+  const normalizedLocations = Object.fromEntries(
+    Object.entries(locations || {})
+      .map(([nodeId, location]) => [String(nodeId || "").trim(), normalizeStoredLocation(location)])
+      .filter(([nodeId, location]) => nodeId && location)
+  )
+
+  window.localStorage.setItem(NODE_LOCATION_STORAGE_KEY, JSON.stringify(normalizedLocations))
+}
+
+function upsertStoredNodeLocation(nodeId, location, baseLocations = readStoredNodeLocations()) {
+  const normalizedNodeId = String(nodeId || "").trim()
+  const normalizedLocation = normalizeStoredLocation(location)
+
+  if (!normalizedNodeId || !normalizedLocation) {
+    return baseLocations
+  }
+
+  const nextLocations = {
+    ...baseLocations,
+    [normalizedNodeId]: normalizedLocation,
+  }
+
+  writeStoredNodeLocations(nextLocations)
+  return nextLocations
 }
 
 function readActiveOwnedNodeId() {
@@ -84,66 +137,39 @@ function writeActiveOwnedNodeId(nodeId) {
   window.localStorage.setItem(ACTIVE_OWNED_NODE_STORAGE_KEY, normalizedNodeId)
 }
 
-function chooseNodeCluster(ownerEmail) {
-  return SEOUL_OWNER_EMAILS.has(String(ownerEmail || "").toLowerCase())
-    ? SEOUL_CLUSTER
-    : GAINESVILLE_CLUSTER
-}
+function getNodeLocation(node, baseLocations = readStoredNodeLocations()) {
+  const nodeId = String(node?.deviceId || node?.id || "").trim()
 
-function createStoredLocation(nodeId, cluster) {
-  const hash = hashString(nodeId)
-  const latitudeOffset = ((hash >> 3) % 240) / 10000 - 0.012
-  const longitudeOffset = ((hash >> 11) % 280) / 10000 - 0.014
-
-  return {
-    latitude: clamp(cluster.latitude + latitudeOffset, -70, 70),
-    longitude: wrapLongitude(cluster.longitude + longitudeOffset),
-    label: cluster.label,
+  if (!nodeId) {
+    return null
   }
-}
 
-function getResolvedNodeLocations(nodes, baseLocations = readStoredNodeLocations()) {
-  const nextLocations = { ...baseLocations }
-  let didChange = false
-
-  nodes.forEach((node) => {
-    const nodeId = String(node?.deviceId || node?.id || "").trim()
-
-    if (!nodeId) {
-      return
-    }
-
-    const cluster = chooseNodeCluster(node?.owner?.email || node?.ownerEmail || "")
-    const nextLocation = createStoredLocation(nodeId, cluster)
-    const currentLocation = nextLocations[nodeId]
-
-    if (
-      !currentLocation ||
-      currentLocation.label !== nextLocation.label ||
-      currentLocation.latitude !== nextLocation.latitude ||
-      currentLocation.longitude !== nextLocation.longitude
-    ) {
-      nextLocations[nodeId] = nextLocation
-      didChange = true
-    }
+  const embeddedLocation = normalizeStoredLocation({
+    latitude: node?.latitude,
+    longitude: node?.longitude,
+    label: node?.locationLabel,
+    isUnknown: node?.isLocationUnknown,
   })
 
-  return {
-    locations: nextLocations,
-    didChange,
+  if (embeddedLocation) {
+    return embeddedLocation
   }
+
+  const storedLocation = normalizeStoredLocation(baseLocations[nodeId])
+
+  if (storedLocation) {
+    return storedLocation
+  }
+
+  return { ...GAINESVILLE_FALLBACK }
 }
 
 function buildNodesWithLocations(nodes, baseLocations = readStoredNodeLocations()) {
-  const { locations, didChange } = getResolvedNodeLocations(nodes, baseLocations)
-
   return {
-    locations,
-    didChange,
-    nodes: nodes
+    nodes: (nodes || [])
       .map((node) => {
         const nodeId = String(node?.deviceId || node?.id || "").trim()
-        const location = locations[nodeId]
+        const location = getNodeLocation(node, baseLocations)
 
         if (!nodeId || !location) {
           return null
@@ -155,6 +181,7 @@ function buildNodesWithLocations(nodes, baseLocations = readStoredNodeLocations(
           latitude: location.latitude,
           longitude: location.longitude,
           locationLabel: location.label,
+          isLocationUnknown: location.isUnknown,
         }
       })
       .filter(Boolean),
@@ -163,11 +190,15 @@ function buildNodesWithLocations(nodes, baseLocations = readStoredNodeLocations(
 
 export {
   ACTIVE_OWNED_NODE_STORAGE_KEY,
+  GAINESVILLE_FALLBACK,
   NODE_LOCATION_STORAGE_KEY,
+  formatCoordinateLabel,
+  getNodeLocation,
+  normalizeStoredLocation,
   readActiveOwnedNodeId,
   readStoredNodeLocations,
+  upsertStoredNodeLocation,
   writeActiveOwnedNodeId,
   writeStoredNodeLocations,
-  getResolvedNodeLocations,
   buildNodesWithLocations,
 }

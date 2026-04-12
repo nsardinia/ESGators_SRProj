@@ -11,7 +11,8 @@ fly secrets set -a your-mcp-app-name-winter-thunder-1708 \
   FIREBASE_CLIENT_EMAIL="$FIREBASE_CLIENT_EMAIL" \
   FIREBASE_PRIVATE_KEY="$FIREBASE_PRIVATE_KEY" \
   FIREBASE_DEVICE_ROOT_PATH="${FIREBASE_DEVICE_ROOT_PATH:-users/{owner_uid}/devices}" \
-  MCP_TRANSPORT=streamable-http \
+  MCP_TRANSPORT=http \
   MCP_HOST=0.0.0.0 \
   MCP_PORT=8000 \
-  MCP_PATH=/mcp
+  MCP_PATH=/mcp \
+  FASTMCP_STATELESS_HTTP=true

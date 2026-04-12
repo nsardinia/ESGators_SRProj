@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import MapView, { Marker, NavigationControl, Popup } from "react-map-gl/maplibre"
 import "maplibre-gl/dist/maplibre-gl.css"
 
@@ -42,6 +42,44 @@ function getClusterCenter(nodes) {
   }
 }
 
+function getPopupPlacement(mapInstance, node) {
+  if (!mapInstance || !node) {
+    return { anchor: "top", offset: 18 }
+  }
+
+  const projected = mapInstance.project([node.longitude, node.latitude])
+  const canvas = mapInstance.getCanvas()
+  const width = canvas?.clientWidth || 0
+  const height = canvas?.clientHeight || 0
+
+  const nearLeftEdge = projected.x < width * 0.24
+  const nearRightEdge = projected.x > width * 0.76
+  const nearTopEdge = projected.y < height * 0.22
+  const nearBottomEdge = projected.y > height * 0.7
+
+  if (nearBottomEdge && !nearRightEdge) {
+    return { anchor: "right", offset: 20 }
+  }
+
+  if (nearBottomEdge && nearRightEdge) {
+    return { anchor: "left", offset: 20 }
+  }
+
+  if (nearLeftEdge) {
+    return { anchor: "right", offset: 20 }
+  }
+
+  if (nearRightEdge) {
+    return { anchor: "left", offset: 20 }
+  }
+
+  if (nearTopEdge) {
+    return { anchor: "bottom", offset: 18 }
+  }
+
+  return { anchor: "top", offset: 18 }
+}
+
 function GlobalNodeMapCanvas({
   nodes,
   ownedNodes,
@@ -53,6 +91,27 @@ function GlobalNodeMapCanvas({
 }) {
   const mapRef = useRef(null)
   const hasAutoFramedOwnedNodes = useRef(false)
+  const [popupPlacement, setPopupPlacement] = useState({ anchor: "top", offset: 18 })
+
+  useEffect(() => {
+    const mapInstance = mapRef.current?.getMap?.()
+    if (!mapInstance || !selectedNode) {
+      return
+    }
+
+    const syncPopupPlacement = () => {
+      setPopupPlacement(getPopupPlacement(mapInstance, selectedNode))
+    }
+
+    syncPopupPlacement()
+    mapInstance.on("move", syncPopupPlacement)
+    mapInstance.on("resize", syncPopupPlacement)
+
+    return () => {
+      mapInstance.off("move", syncPopupPlacement)
+      mapInstance.off("resize", syncPopupPlacement)
+    }
+  }, [selectedNode])
 
   useEffect(() => {
     if (!mapRef.current || ownedNodes.length === 0 || hasAutoFramedOwnedNodes.current) {
@@ -129,8 +188,9 @@ function GlobalNodeMapCanvas({
             closeOnClick={false}
             latitude={selectedNode.latitude}
             longitude={selectedNode.longitude}
-            maxWidth="180px"
-            offset={18}
+            anchor={popupPlacement.anchor}
+            maxWidth="220px"
+            offset={popupPlacement.offset}
             onClose={onClearSelection}
           >
             {selectedNode.ownership === "owned" ? (
@@ -151,7 +211,7 @@ function GlobalNodeMapCanvas({
                   </div>
                   <div>
                     <dt>Location</dt>
-                    <dd>{selectedNode.locationLabel}</dd>
+                    <dd>{selectedNode.isLocationUnknown ? `${selectedNode.locationLabel} (unknown)` : selectedNode.locationLabel}</dd>
                   </div>
                   <div>
                     <dt>Last Update</dt>
@@ -166,6 +226,14 @@ function GlobalNodeMapCanvas({
                       <div>
                         <dt>Humidity</dt>
                         <dd>{selectedNode.telemetry.humidityPct ?? "N/A"}%</dd>
+                      </div>
+                      <div>
+                        <dt>NO2</dt>
+                        <dd>{selectedNode.telemetry.no2 ?? "N/A"}</dd>
+                      </div>
+                      <div>
+                        <dt>Sound Level</dt>
+                        <dd>{selectedNode.telemetry.soundLevel ?? "N/A"} dB</dd>
                       </div>
                     </>
                   )}
@@ -185,7 +253,7 @@ function GlobalNodeMapCanvas({
                   </div>
                   <div>
                     <dt>Location</dt>
-                    <dd>{selectedNode.locationLabel}</dd>
+                    <dd>{selectedNode.isLocationUnknown ? `${selectedNode.locationLabel} (unknown)` : selectedNode.locationLabel}</dd>
                   </div>
                   <div>
                     <dt>Owner</dt>

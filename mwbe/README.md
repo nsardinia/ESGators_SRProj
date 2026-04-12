@@ -94,6 +94,26 @@ create table if not exists public.users (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.devices (
+  device_id text primary key,
+  owner_uid text not null,
+  name text not null default '',
+  description text not null default '',
+  status text not null default 'active',
+  device_code_hash text not null,
+  latitude double precision,
+  longitude double precision,
+  location_label text,
+  is_location_unknown boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.devices add column if not exists latitude double precision;
+alter table public.devices add column if not exists longitude double precision;
+alter table public.devices add column if not exists location_label text;
+alter table public.devices add column if not exists is_location_unknown boolean not null default true;
+
 create table if not exists public.device_history (
   sample_key text primary key,
   device_id text not null,
@@ -174,7 +194,9 @@ Without these values, the API still runs, but Grafana push is skipped.
 
 ### `src/routes/devices.js`
 - `GET /devices/owned` list the authenticated caller's devices
+- `GET /devices/network` list network devices including persisted location fields
 - `GET /devices/:deviceId/history?limit=360` fetch historical telemetry for one authenticated caller device
+- `PUT /devices/:deviceId/location` update a node's persisted map position
 - `POST /devices/provision` mint a Firebase custom token for a device
 
 Claimed device secrets remain a single `deviceSecret` value. Newer secrets can carry an embedded owner hint so hardware clients do not need a separate owner UID environment variable.

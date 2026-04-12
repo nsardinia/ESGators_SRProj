@@ -118,8 +118,8 @@
 
 .global-node-map-frame {
   position: relative;
-  height: min(72vh, 760px);
-  min-height: 500px;
+  height: min(64vh, 680px);
+  min-height: 460px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   overflow: visible;
 }
@@ -206,7 +206,7 @@
   flex-direction: column;
   gap: 6px;
   padding: 10px;
-  min-width: min(170px, 48vw);
+  min-width: min(190px, 42vw);
   color: #edf4ff;
 }
 
@@ -335,11 +335,11 @@
 
 @media (max-width: 720px) {
   .global-node-map-frame {
-    min-height: 420px;
-    height: 68vh;
+    min-height: 380px;
+    height: 60vh;
   }
 
   .global-node-map-popup {
-    min-width: min(160px, 54vw);
+    min-width: min(170px, 58vw);
   }
 }

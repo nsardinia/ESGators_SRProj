@@ -12,8 +12,10 @@ const promClient = require("prom-client")
 const { createSupabaseFromEnv } = require("./supabase")
 
 let db = null
+let firebaseAdmin = null
 try {
     db = require("./firebase")
+    firebaseAdmin = require("firebase-admin")
 } catch (error) {
     console.warn("Firebase disabled:", error.message)
 }
@@ -80,6 +82,12 @@ const DEFAULT_DEVICE_OWNER_LABELS = {
     owner_email: "unknown",
     device_name: "unknown",
 }
+const DEFAULT_ALLOWED_WEB_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+]
 const FIREBASE_SENSOR_MAPPINGS = [
     { bucket: "sht30", field: "temperatureC", metric_type: "temperature" },
     { bucket: "sht30", field: "humidityPct", metric_type: "humidity" },
@@ -122,6 +130,85 @@ function parseBoolean(value, fallback = false) {
     }
 
     return ["1", "true", "yes", "on"].includes(String(value).toLowerCase())
+}
+
+function normalizeOrigin(value) {
+    return String(value || "").trim().replace(/\/+$/, "")
+}
+
+function buildAllowedOrigins(...sources) {
+    const configuredOrigins = sources
+        .flatMap((source) => String(source || "").split(","))
+        .map((origin) => normalizeOrigin(origin))
+        .filter(Boolean)
+
+    return [...new Set([...DEFAULT_ALLOWED_WEB_ORIGINS, ...configuredOrigins])]
+}
+
+function createCorsOptions() {
+    const allowedOrigins = buildAllowedOrigins(
+        process.env.CORS_ORIGIN,
+        process.env.CORS_ORIGINS,
+        process.env.FRONTEND_URL,
+        process.env.FRONTEND_ORIGIN,
+        process.env.APP_URL,
+        process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : ""
+    )
+    const allowAllOrigins = [process.env.CORS_ORIGIN, process.env.CORS_ORIGINS]
+        .some((value) => ["*", "true"].includes(String(value || "").trim().toLowerCase()))
+
+    return {
+        origin(origin, callback) {
+            if (allowAllOrigins || !origin) {
+                callback(null, true)
+                return
+            }
+
+            callback(null, allowedOrigins.includes(normalizeOrigin(origin)))
+        },
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization"],
+    }
+}
+
+function getBearerTokenFromHeaders(headers = {}) {
+    const authorizationHeader = String(headers.authorization || "").trim()
+
+    if (!authorizationHeader) {
+        return ""
+    }
+
+    const [scheme, token] = authorizationHeader.split(" ")
+    if (scheme !== "Bearer" || !token) {
+        return ""
+    }
+
+    return token.trim()
+}
+
+async function verifyFirebaseUserFromRequest(req) {
+    if (!firebaseAdmin) {
+        return null
+    }
+
+    const token = getBearerTokenFromHeaders(req.headers)
+    if (!token) {
+        return null
+    }
+
+    try {
+        const decodedToken = await firebaseAdmin.auth().verifyIdToken(token)
+
+        if (!decodedToken?.uid || decodedToken.role === "device") {
+            return null
+        }
+
+        return decodedToken
+    } catch (error) {
+        const authError = new Error("Invalid Firebase ID token")
+        authError.statusCode = 401
+        throw authError
+    }
 }
 
 function normalizeKalshiBaseUrl(value) {
@@ -1046,6 +1133,8 @@ function createApp(options = {}) {
         return [
             "You are the ESGators device assistant inside the user's devices page.",
             "Use the connected ESGators MCP tools to inspect live Firebase data, historical trends, backend status, and anomaly context before answering.",
+            "Return only the final user-facing answer. Do not paste raw JSON, full MCP payloads, tool traces, schema blocks, or internal IDs unless the user explicitly asks for them.",
+            "Summarize readings and anomalies in plain language with short bullets or short paragraphs when helpful.",
             selectedLine,
             deviceSummary,
             "Keep the answer concise, practical, and grounded in the available telemetry. If the data is missing or insufficient, say that clearly.",
@@ -2544,7 +2633,7 @@ function createApp(options = {}) {
         }
     }
 
-    app.use(cors())
+    app.use(cors(createCorsOptions()))
     app.use(express.json())
 
     publishThresholdMetrics()
@@ -2949,7 +3038,14 @@ function createApp(options = {}) {
 
     app.post("/firebase/sync", async (req, res) => {
         try {
-            const ownerUid = String(req.body?.ownerUid || req.query.ownerUid || "").trim()
+            const decodedToken = await verifyFirebaseUserFromRequest(req)
+            const requestedOwnerUid = String(req.body?.ownerUid || req.query.ownerUid || "").trim()
+            const ownerUid = decodedToken?.uid || requestedOwnerUid
+            if (decodedToken?.uid && requestedOwnerUid && requestedOwnerUid !== decodedToken.uid) {
+                res.status(403).json({ error: "Authenticated user does not match requested ownerUid" })
+                return
+            }
+
             const deviceId = String(req.body?.deviceId || req.query.deviceId || "").trim()
             const result = await syncFirebaseData({ ownerUid, deviceId })
 
@@ -2960,12 +3056,13 @@ function createApp(options = {}) {
         } catch (error) {
             state.lastFirebaseError = error.message
             console.error(error.message)
-            res.status(500).json({ error: "Failed to sync Firebase data", detail: error.message })
+            res.status(Number(error.statusCode) || 500).json({ error: "Failed to sync Firebase data", detail: error.message })
         }
     })
 
     app.post("/firebase/sync/:deviceId", async (req, res) => {
         try {
+            await verifyFirebaseUserFromRequest(req)
             const deviceId = String(req.params.deviceId || "").trim()
             const result = await syncFirebaseData({ deviceId })
 
@@ -2976,7 +3073,7 @@ function createApp(options = {}) {
         } catch (error) {
             state.lastFirebaseError = error.message
             console.error(error.message)
-            res.status(500).json({ error: "Failed to sync Firebase data", detail: error.message })
+            res.status(Number(error.statusCode) || 500).json({ error: "Failed to sync Firebase data", detail: error.message })
         }
     })
 

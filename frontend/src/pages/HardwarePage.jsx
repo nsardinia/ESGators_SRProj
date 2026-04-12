@@ -2,20 +2,25 @@ import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent } from "../components/ui/card"
 import Button from "../components/ui/button"
 
+const docsBaseUrl = (import.meta.env.VITE_DOCS_BASE_URL?.trim() || "https://esgators-docs-260412.fly.dev").replace(
+  /\/+$/,
+  ""
+)
+
 const documentationLinks = [
   {
     label: "Documentation Home",
-    href: "/docs/",
+    href: `${docsBaseUrl}/`,
     description: "Project overview, local setup notes, and the main docs landing page.",
   },
   {
     label: "Backend API Docs",
-    href: "/docs/backend-api/",
+    href: `${docsBaseUrl}/backend-api/`,
     description: "Service architecture, endpoints, and generated API documentation references.",
   },
   {
     label: "Frontend Structure",
-    href: "/docs/frontend-structure/",
+    href: `${docsBaseUrl}/frontend-structure/`,
     description: "Frontend organization, routing, and UI architecture notes.",
   },
 ]
@@ -234,6 +239,8 @@ function HardwarePage() {
             <a
               key={link.href}
               href={link.href}
+              target="_blank"
+              rel="noreferrer"
               className="rounded-[14px] border border-[rgba(96,165,250,0.16)] bg-[rgba(15,23,42,0.72)] px-4 py-3 transition-colors hover:border-[rgba(96,165,250,0.36)] hover:bg-[rgba(37,99,235,0.08)]"
             >
               <p className="text-sm font-semibold text-[#bfdbfe]">{link.label}</p>

@@ -31,11 +31,27 @@ const deleteDeviceQuerySchema = {
 
 const claimBodySchema = {
   type: "object",
-  required: ["name", "description"],
+  required: ["name", "description", "latitude", "longitude"],
   additionalProperties: false,
   properties: {
     name: { type: "string", minLength: 1, maxLength: 120 },
     description: { type: "string", minLength: 1, maxLength: 500 },
+    latitude: { type: "number", minimum: -90, maximum: 90 },
+    longitude: { type: "number", minimum: -180, maximum: 180 },
+    locationLabel: { type: "string", minLength: 1, maxLength: 120 },
+    isLocationUnknown: { type: "boolean" },
+  },
+};
+
+const deviceLocationBodySchema = {
+  type: "object",
+  required: ["latitude", "longitude"],
+  additionalProperties: false,
+  properties: {
+    latitude: { type: "number", minimum: -90, maximum: 90 },
+    longitude: { type: "number", minimum: -180, maximum: 180 },
+    locationLabel: { type: "string", minLength: 1, maxLength: 120 },
+    isLocationUnknown: { type: "boolean" },
   },
 };
 
@@ -75,6 +91,10 @@ const deviceSchema = {
     name: { type: "string" },
     description: { type: "string" },
     status: { type: "string" },
+    latitude: { type: ["number", "null"] },
+    longitude: { type: ["number", "null"] },
+    locationLabel: { type: ["string", "null"] },
+    isLocationUnknown: { type: "boolean" },
   },
 };
 
@@ -94,6 +114,10 @@ const networkDeviceSchema = {
         firebaseUid: { type: "string" },
       },
     },
+    latitude: { type: ["number", "null"] },
+    longitude: { type: ["number", "null"] },
+    locationLabel: { type: ["string", "null"] },
+    isLocationUnknown: { type: "boolean" },
   },
 };
 
@@ -123,6 +147,17 @@ const revokedDeviceSchema = {
     deviceId: { type: "string" },
     status: { type: "string" },
     revokedAt: { type: "string", format: "date-time" },
+  },
+};
+
+const updatedDeviceLocationSchema = {
+  type: "object",
+  properties: {
+    deviceId: { type: "string" },
+    latitude: { type: "number" },
+    longitude: { type: "number" },
+    locationLabel: { type: "string" },
+    isLocationUnknown: { type: "boolean" },
   },
 };
 
@@ -197,6 +232,87 @@ function generateDeviceId() {
 
 function generateDeviceSecret() {
   return crypto.randomBytes(32).toString("base64url");
+}
+
+const GAINESVILLE_FALLBACK_LOCATION = {
+  latitude: 29.6516,
+  longitude: -82.3248,
+  locationLabel: "Unknown location (Gainesville, Florida fallback)",
+  isLocationUnknown: true,
+};
+
+function normalizeLatitude(value) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return null;
+  }
+
+  return Math.min(Math.max(numericValue, -90), 90);
+}
+
+function normalizeLongitude(value) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return null;
+  }
+
+  let wrappedValue = numericValue;
+
+  while (wrappedValue < -180) {
+    wrappedValue += 360;
+  }
+
+  while (wrappedValue > 180) {
+    wrappedValue -= 360;
+  }
+
+  return wrappedValue;
+}
+
+function formatCoordinateLabel(latitude, longitude) {
+  return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+}
+
+function normalizeDeviceLocation(input = {}) {
+  const latitude = normalizeLatitude(input.latitude);
+  const longitude = normalizeLongitude(input.longitude);
+
+  if (latitude === null || longitude === null) {
+    return null;
+  }
+
+  const isLocationUnknown = Boolean(input.isLocationUnknown);
+  const locationLabel = String(input.locationLabel || "").trim()
+    || formatCoordinateLabel(latitude, longitude);
+
+  return {
+    latitude,
+    longitude,
+    locationLabel,
+    isLocationUnknown,
+  };
+}
+
+function mapDeviceRecord(device) {
+  const location = normalizeDeviceLocation({
+    latitude: device.latitude,
+    longitude: device.longitude,
+    locationLabel: device.location_label,
+    isLocationUnknown: device.is_location_unknown,
+  });
+
+  return {
+    deviceId: device.device_id,
+    name: device.name || "Unnamed Node",
+    description: device.description || "",
+    status: device.status,
+    latitude: location?.latitude ?? null,
+    longitude: location?.longitude ?? null,
+    locationLabel: location?.locationLabel ?? null,
+    isLocationUnknown: location?.isLocationUnknown ?? true,
+  };
 }
 
 function encodeOwnerHint(ownerUid) {
@@ -386,7 +502,7 @@ async function ensureOwnedDevice(app, ownerUid, deviceId) {
   const ownerKeys = [...new Set([owner.id, owner.firebase_uid].filter(Boolean))];
   const { data: device, error } = await app.supabase
     .from("devices")
-    .select("device_id, owner_uid, name, description, status")
+    .select("device_id, owner_uid, name, description, status, latitude, longitude, location_label, is_location_unknown")
     .eq("device_id", deviceId)
     .in("owner_uid", ownerKeys)
     .maybeSingle();
@@ -403,6 +519,38 @@ async function ensureOwnedDevice(app, ownerUid, deviceId) {
     device,
     owner,
   };
+}
+
+async function deleteDeviceSupabaseRecords(app, deviceId, owner) {
+  const ownerKeys = [...new Set([owner?.id, owner?.firebase_uid].filter(Boolean))];
+
+  const { error: historyDeleteError } = await app.supabase
+    .from("device_history")
+    .delete()
+    .eq("device_id", deviceId)
+    .in("owner_uid", ownerKeys);
+
+  if (historyDeleteError) {
+    throw app.httpErrors.internalServerError(historyDeleteError.message);
+  }
+
+  const { data: deletedDevice, error: deviceDeleteError } = await app.supabase
+    .from("devices")
+    .delete()
+    .eq("device_id", deviceId)
+    .in("owner_uid", ownerKeys)
+    .select("device_id")
+    .maybeSingle();
+
+  if (deviceDeleteError) {
+    throw app.httpErrors.internalServerError(deviceDeleteError.message);
+  }
+
+  if (!deletedDevice) {
+    throw app.httpErrors.notFound("Device not found");
+  }
+
+  return deletedDevice;
 }
 
 async function devicesRoutes(app) {
@@ -465,7 +613,7 @@ async function devicesRoutes(app) {
       for (const ownerKey of ownerKeys) {
         const { data, error } = await app.supabase
           .from("devices")
-          .select("device_id, name, description, status")
+          .select("device_id, name, description, status, latitude, longitude, location_label, is_location_unknown")
           .eq("owner_uid", ownerKey);
 
         if (error) {
@@ -477,12 +625,7 @@ async function devicesRoutes(app) {
         }
 
         for (const device of data || []) {
-          devicesById.set(device.device_id, {
-            deviceId: device.device_id,
-            name: device.name || "Unnamed Node",
-            description: device.description || "",
-            status: device.status,
-          });
+          devicesById.set(device.device_id, mapDeviceRecord(device));
         }
       }
 
@@ -594,7 +737,7 @@ async function devicesRoutes(app) {
 
       const { data: devices, error: devicesError } = await app.supabase
         .from("devices")
-        .select("device_id, owner_uid, name, description, status")
+        .select("device_id, owner_uid, name, description, status, latitude, longitude, location_label, is_location_unknown")
         .order("device_id", { ascending: true });
 
       if (devicesError) {
@@ -615,11 +758,10 @@ async function devicesRoutes(app) {
           continue;
         }
 
+        const mappedDevice = mapDeviceRecord(device);
+
         devicesById.set(device.device_id, {
-          deviceId: device.device_id,
-          name: device.name || "Unnamed Node",
-          description: device.description || "",
-          status: device.status,
+          ...mappedDevice,
           owner: {
             id: owner.id,
             email: owner.email,
@@ -635,7 +777,7 @@ async function devicesRoutes(app) {
     }
   );
 
-  async function claimDevice(ownerUid, name, description, reply) {
+  async function claimDevice(ownerUid, name, description, locationInput, reply) {
     ensureDb(app);
     const owner = await findOwner(app, ownerUid);
 
@@ -646,6 +788,11 @@ async function devicesRoutes(app) {
     const deviceId = generateDeviceId();
     const deviceSecret = generateDeviceSecret();
     const deviceCodeHash = createSecretHash(deviceSecret);
+    const location = normalizeDeviceLocation(locationInput);
+
+    if (!location) {
+      throw app.httpErrors.badRequest("A valid node latitude and longitude are required");
+    }
 
     const ownerKeys = [...new Set([owner.id, owner.firebase_uid].filter(Boolean))];
     let insertError = null;
@@ -656,6 +803,10 @@ async function devicesRoutes(app) {
         owner_uid: ownerKey,
         name,
         description,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        location_label: location.locationLabel,
+        is_location_unknown: location.isLocationUnknown,
         device_code_hash: deviceCodeHash,
         status: "active",
       });
@@ -704,7 +855,7 @@ async function devicesRoutes(app) {
     async (request, reply) => {
       const decodedToken = await verifyFirebaseUser(app, request);
 
-      return claimDevice(decodedToken.uid, "", "", reply);
+      return claimDevice(decodedToken.uid, "", "", GAINESVILLE_FALLBACK_LOCATION, reply);
     }
   );
 
@@ -729,8 +880,61 @@ async function devicesRoutes(app) {
         decodedToken.uid,
         request.body.name.trim(),
         request.body.description.trim(),
+        request.body,
         reply
       );
+    }
+  );
+
+  app.put(
+    "/:deviceId/location",
+    {
+      schema: {
+        tags: ["Devices"],
+        summary: "Update a device location",
+        params: deviceIdParamSchema,
+        body: deviceLocationBodySchema,
+        response: {
+          200: updatedDeviceLocationSchema,
+          404: errorSchema,
+          500: errorSchema,
+        },
+      },
+    },
+    async (request) => {
+      ensureDb(app);
+      const decodedToken = await verifyFirebaseUser(app, request);
+      const { deviceId } = request.params;
+      const { owner } = await ensureOwnedDevice(app, decodedToken.uid, deviceId);
+      const location = normalizeDeviceLocation(request.body);
+
+      if (!location) {
+        throw app.httpErrors.badRequest("A valid node latitude and longitude are required");
+      }
+
+      const ownerKeys = [...new Set([owner.id, owner.firebase_uid].filter(Boolean))];
+      const { error } = await app.supabase
+        .from("devices")
+        .update({
+          latitude: location.latitude,
+          longitude: location.longitude,
+          location_label: location.locationLabel,
+          is_location_unknown: location.isLocationUnknown,
+        })
+        .eq("device_id", deviceId)
+        .in("owner_uid", ownerKeys);
+
+      if (error) {
+        throw app.httpErrors.internalServerError(error.message);
+      }
+
+      return {
+        deviceId,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        locationLabel: location.locationLabel,
+        isLocationUnknown: location.isLocationUnknown,
+      };
     }
   );
 
@@ -896,29 +1100,8 @@ async function devicesRoutes(app) {
       const decodedToken = await verifyFirebaseUser(app, request);
 
       const { deviceId } = request.params;
-      const owner = await findOwner(app, decodedToken.uid);
-
-      if (!owner) {
-        throw app.httpErrors.notFound("Owner user does not exist");
-      }
-
-      const ownerKeys = [...new Set([owner.id, owner.firebase_uid].filter(Boolean))];
-
-      const { data: deletedDevice, error } = await app.supabase
-        .from("devices")
-        .delete()
-        .eq("device_id", deviceId)
-        .in("owner_uid", ownerKeys)
-        .select("device_id")
-        .maybeSingle();
-
-      if (error) {
-        throw app.httpErrors.internalServerError(error.message);
-      }
-
-      if (!deletedDevice) {
-        throw app.httpErrors.notFound("Device not found");
-      }
+      const { owner } = await ensureOwnedDevice(app, decodedToken.uid, deviceId);
+      await deleteDeviceSupabaseRecords(app, deviceId, owner);
 
       const firebaseAuth = getFirebaseAuthIfConfigured(app);
 

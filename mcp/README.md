@@ -13,9 +13,10 @@ It supports:
 For ChatGPT custom connectors using MCP, you should run this server over a remote HTTP transport instead of local stdio.
 
 Recommended transport:
-- `streamable-http`
+- `http` with stateless mode enabled for hosted deployments
 
 Also exposed:
+- `streamable-http`
 - `sse`
 - `stdio` for local testing
 
@@ -45,20 +46,22 @@ Then start the MCP server in HTTP mode:
 
 ```bash
 ./.venv/bin/python mcp/mcpserver.py \
-  --transport streamable-http \
+  --transport http \
   --host 0.0.0.0 \
   --port 8000 \
-  --path /mcp
+  --path /mcp \
+  --stateless-http
 ```
 
 If you prefer env vars, add these to `backend/.env`:
 
 ```dotenv
 MCP_BACKEND_BASE_URL=http://localhost:5000
-MCP_TRANSPORT=streamable-http
+MCP_TRANSPORT=http
 MCP_HOST=0.0.0.0
 MCP_PORT=8000
 MCP_PATH=/mcp
+FASTMCP_STATELESS_HTTP=true
 ```
 
 ## Expose It Publicly
@@ -109,6 +112,7 @@ Notes:
 - the hosted MCP service needs network access to your backend, Supabase, and Firebase RTDB
 - hosted platforms often inject `PORT`; `mcpserver.py` now respects that automatically
 - for production, prefer setting secrets in the hosting platform instead of baking them into the image
+- for OpenAI-hosted MCP clients, prefer FastMCP `http` transport with stateless mode instead of stateful `streamable-http`
 - your RTDB rules in [`firebase-rtdb.rules.json`](/home/nicholas/srproj/ESGators_SRProj/firebase-rtdb.rules.json) only allow authenticated reads under `users/<firebase_uid>/...`, so hosted MCP should use Firebase Admin credentials instead of anonymous REST reads
 - the MCP server now supports `FIREBASE_SERVICE_ACCOUNT_JSON` or the split env vars `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY`
 - if your data lives at `users/<firebase_uid>/devices/<deviceId>`, set `FIREBASE_DEVICE_ROOT_PATH=users/{owner_uid}/devices`
@@ -131,10 +135,11 @@ fly secrets set -a your-mcp-app-name-winter-thunder-1708 \
   FIREBASE_CLIENT_EMAIL="$FIREBASE_CLIENT_EMAIL" \
   FIREBASE_PRIVATE_KEY="$FIREBASE_PRIVATE_KEY" \
   FIREBASE_DEVICE_ROOT_PATH='users/{owner_uid}/devices' \
-  MCP_TRANSPORT=streamable-http \
+  MCP_TRANSPORT=http \
   MCP_HOST=0.0.0.0 \
   MCP_PORT=8000 \
-  MCP_PATH=/mcp
+  MCP_PATH=/mcp \
+  FASTMCP_STATELESS_HTTP=true
 ```
 
 If you prefer a single secret instead of split vars, you can also set `FIREBASE_SERVICE_ACCOUNT_JSON` to the full JSON service account payload.
