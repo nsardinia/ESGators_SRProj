@@ -909,11 +909,31 @@ function normalizeMwbeUserRecord(userRecord = {}) {
     }
 }
 
+function extractFirebaseAuthToken(request = {}) {
+    const authorizationHeader = String(
+        request.headers?.authorization
+        || request.get?.("Authorization")
+        || ""
+    ).trim()
+    const bearerMatch = authorizationHeader.match(/^Bearer\s+(.+)$/i)
+
+    if (bearerMatch?.[1]) {
+        return String(bearerMatch[1]).trim()
+    }
+
+    return String(
+        request.body?.firebaseIdToken
+        || request.query?.firebaseIdToken
+        || ""
+    ).trim()
+}
+
 function createApp(options = {}) {
     const firebaseDb = options.firebaseDb === undefined ? db : options.firebaseDb
     const supabase = options.supabase === undefined ? createSupabaseFromEnv() : options.supabase
     const kalshiHttpClient = options.kalshiHttpClient || axios
     const mwbeHttpClient = options.mwbeHttpClient || axios
+    const firebaseHttpClient = options.firebaseHttpClient || axios
     const app = express()
     const registry = new promClient.Registry()
     const state = {
@@ -2257,7 +2277,7 @@ function createApp(options = {}) {
         }
     }
 
-    async function readFirebaseValue(pathToRead) {
+    async function readFirebaseValue(pathToRead, options = {}) {
         if (firebaseDb) {
             const snapshot = await firebaseDb.ref(pathToRead).once("value")
             return snapshot.val()
@@ -2269,13 +2289,14 @@ function createApp(options = {}) {
             throw new Error("Firebase database URL is not configured")
         }
 
-        const response = await axios.get(
-            `${config.databaseUrl}/${pathToRead}.json`,
-            {
-                timeout: 10000,
-                validateStatus: (status) => status >= 200 && status < 300,
-            }
-        )
+        const authToken = String(options.authToken || "").trim()
+        const response = await firebaseHttpClient({
+            method: "GET",
+            url: `${config.databaseUrl}/${pathToRead}.json`,
+            params: authToken ? { auth: authToken } : {},
+            timeout: 10000,
+            validateStatus: (status) => status >= 200 && status < 300,
+        })
 
         return response.data
     }
@@ -2493,8 +2514,8 @@ function createApp(options = {}) {
         })
     }
 
-    async function readFirebaseRootEntries(config) {
-        const rootPayload = await readFirebaseValue(config.deviceRootPath)
+    async function readFirebaseRootEntries(config, options = {}) {
+        const rootPayload = await readFirebaseValue(config.deviceRootPath, options)
         return normalizeFirebaseRootEntries(rootPayload, config)
     }
 
@@ -2543,7 +2564,9 @@ function createApp(options = {}) {
                     deviceId,
                     ownerUid: resolvedOwnerUid,
                     path: pathToRead,
-                    payload: await readFirebaseValue(pathToRead),
+                    payload: await readFirebaseValue(pathToRead, {
+                        authToken: options.authToken,
+                    }),
                 }
             } catch (error) {
                 return {
@@ -2574,7 +2597,9 @@ function createApp(options = {}) {
         let rootEntries = []
 
         try {
-            rootEntries = await readFirebaseRootEntries(config)
+            rootEntries = await readFirebaseRootEntries(config, {
+                authToken: options.authToken,
+            })
         } catch (error) {
             if (
                 resolvedEntriesByDeviceId.size > 0
@@ -2674,13 +2699,13 @@ function createApp(options = {}) {
         state.lastFirebaseError = null
         state.lastFirebaseSamples = result.accepted
         state.lastFirebaseSync = {
-            ownerUid: options.ownerUid || null,
-            deviceCount: normalizedDevices.length,
+                ownerUid: options.ownerUid || null,
+                deviceCount: normalizedDevices.length,
             accepted: result.accepted.length,
             rejected: result.rejected.length,
-            path: options.path || config.deviceRootPath,
-            source: config.source,
-            syncedAt: Date.now(),
+                path: options.path || config.deviceRootPath,
+                source: config.source,
+                syncedAt: Date.now(),
             pushResult: result.pushResult,
             skippedUnchanged,
         }
@@ -2716,6 +2741,7 @@ function createApp(options = {}) {
             const resolvedOwnerUid = await resolveFirebaseOwnerUid(requestedOwnerUid)
             const ownedDeviceIds = await loadOwnedFirebaseDeviceIds(requestedOwnerUid)
             return syncFirebaseDevicesByIds(ownedDeviceIds, config, {
+                authToken: options.authToken,
                 ownerUid: resolvedOwnerUid,
                 path: buildFirebaseOwnerDevicesPath(config.deviceRootPath, resolvedOwnerUid || requestedOwnerUid),
             })
@@ -2723,6 +2749,7 @@ function createApp(options = {}) {
 
         if (requestedDeviceId) {
             return syncFirebaseDevicesByIds([requestedDeviceId], config, {
+                authToken: options.authToken,
                 path: buildFirebaseDevicePath(config.deviceRootPath, "{owner}", requestedDeviceId),
             })
         }
@@ -2730,6 +2757,7 @@ function createApp(options = {}) {
         const knownDeviceIds = await loadKnownFirebaseDeviceIds()
         if (knownDeviceIds.length > 0) {
             return syncFirebaseDevicesByIds(knownDeviceIds, config, {
+                authToken: options.authToken,
                 path: joinFirebasePath(config.deviceRootPath, "{known_owners}", FIREBASE_USER_DEVICES_PATH_SEGMENT),
             })
         }
@@ -2738,7 +2766,9 @@ function createApp(options = {}) {
         let devices
 
         try {
-            devices = await readFirebaseValue(pathToRead)
+            devices = await readFirebaseValue(pathToRead, {
+                authToken: options.authToken,
+            })
         } catch (error) {
             if (!isFirebasePermissionError(error)) {
                 throw error
@@ -2933,6 +2963,7 @@ function createApp(options = {}) {
 
     app.get("/data", async (req, res) => {
         const config = getFirebaseConfig()
+        const authToken = extractFirebaseAuthToken(req)
 
         if (!firebaseDb && !config.databaseUrl) {
             res.status(503).json({ error: "Firebase is disabled" })
@@ -2943,7 +2974,7 @@ function createApp(options = {}) {
         const requestedDeviceId = String(req.query.deviceId || "").trim()
         const deviceEntries = explicitPath || !requestedDeviceId
             ? []
-            : await loadFirebaseDeviceEntriesByIds([requestedDeviceId], config)
+            : await loadFirebaseDeviceEntriesByIds([requestedDeviceId], config, { authToken })
         const pathToRead = explicitPath
             || deviceEntries[0]?.path
             || (requestedDeviceId
@@ -2951,7 +2982,9 @@ function createApp(options = {}) {
                 : config.deviceRootPath)
 
         const payload = explicitPath || !requestedDeviceId
-            ? await readFirebaseValue(pathToRead)
+            ? await readFirebaseValue(pathToRead, {
+                authToken,
+            })
             : deviceEntries[0]?.payload || null
         res.json(payload)
     })
@@ -3047,6 +3080,7 @@ function createApp(options = {}) {
 
     app.get("/firebase/preview/:deviceId", async (req, res) => {
         const config = getFirebaseConfig()
+        const authToken = extractFirebaseAuthToken(req)
 
         if (!firebaseDb && !config.databaseUrl) {
             res.status(503).json({ error: "Firebase is disabled" })
@@ -3055,7 +3089,7 @@ function createApp(options = {}) {
 
         try {
             const deviceId = String(req.params.deviceId || "").trim()
-            const deviceEntries = await loadFirebaseDeviceEntriesByIds([deviceId], config)
+            const deviceEntries = await loadFirebaseDeviceEntriesByIds([deviceId], config, { authToken })
             const deviceEntry = deviceEntries[0] || null
             const pathToRead = deviceEntry?.path
                 || buildFirebaseDevicePath(config.deviceRootPath, "{owner}", deviceId)
@@ -3347,7 +3381,11 @@ function createApp(options = {}) {
             }
 
             const deviceId = String(req.body?.deviceId || req.query.deviceId || "").trim()
-            const result = await syncFirebaseData({ ownerUid, deviceId })
+            const result = await syncFirebaseData({
+                ownerUid,
+                deviceId,
+                authToken: extractFirebaseAuthToken(req),
+            })
 
             res.json({
                 status: "success",
@@ -3364,7 +3402,10 @@ function createApp(options = {}) {
         try {
             await verifyFirebaseUserFromRequest(req)
             const deviceId = String(req.params.deviceId || "").trim()
-            const result = await syncFirebaseData({ deviceId })
+            const result = await syncFirebaseData({
+                deviceId,
+                authToken: extractFirebaseAuthToken(req),
+            })
 
             res.json({
                 status: "success",

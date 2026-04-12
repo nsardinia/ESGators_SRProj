@@ -822,6 +822,85 @@ test("firebase sync skips unchanged samples on subsequent polls", async () => {
     }
 })
 
+test("firebase sync can read owner device paths with a Firebase ID token when admin auth is unavailable", async () => {
+    const deviceId = "dev_token_sync"
+    const ownerFirebaseUid = "owner-123"
+    const firebaseHttpClient = async (request) => {
+        assert.equal(request.method, "GET")
+        assert.equal(request.params.auth, "firebase-id-token")
+        assert.equal(
+            request.url,
+            `${DEFAULT_FIREBASE_DATABASE_URL}/users/${ownerFirebaseUid}/devices/${deviceId}.json`
+        )
+
+        return {
+            data: {
+                sht30: {
+                    latest: {
+                        deviceId,
+                        temperatureC: 22.4,
+                        humidityPct: 48.6,
+                        updatedAtMs: 1712970001000,
+                    },
+                },
+            },
+        }
+    }
+    const mwbeHttpClient = async (request) => {
+        const normalizedUrl = String(request?.url || "")
+
+        if (normalizedUrl.endsWith("/devices/owned")) {
+            assert.equal(request?.params?.ownerUid, ownerFirebaseUid)
+
+            return {
+                data: {
+                    devices: [
+                        {
+                            deviceId,
+                            name: "Token-backed node",
+                            description: "Reads with Firebase ID token",
+                            status: "active",
+                        },
+                    ],
+                },
+            }
+        }
+
+        throw new Error(`Unhandled request: ${normalizedUrl}`)
+    }
+    const server = await createTestServer({
+        firebaseDb: null,
+        supabase: null,
+        mwbeHttpClient,
+        firebaseHttpClient,
+    })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/firebase/sync`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: "Bearer firebase-id-token",
+            },
+            body: JSON.stringify({ ownerUid: ownerFirebaseUid }),
+        })
+
+        assert.equal(response.status, 200)
+        const body = await response.json()
+
+        assert.equal(body.ownerUid, ownerFirebaseUid)
+        assert.equal(body.deviceCount, 1)
+        assert.equal(body.accepted, 2)
+        assert.equal(body.path, `users/${ownerFirebaseUid}/devices`)
+        assert.deepEqual(
+            body.samples.map((sample) => sample.metric_type).sort(),
+            ["humidity", "temperature"]
+        )
+    } finally {
+        await server.close()
+    }
+})
+
 test("firebase sync falls back to known device ids when user root is denied", async () => {
     const firstDeviceId = "dev_known_a"
     const secondDeviceId = "dev_known_b"
