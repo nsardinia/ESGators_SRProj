@@ -92,6 +92,10 @@ docker run --rm -p 8000:8000 \
   -e SUPABASE_URL=https://your-project.supabase.co \
   -e SUPABASE_SERVICE_ROLE_KEY=your-service-role-key \
   -e FIREBASE_DATABASE_URL=https://your-project-default-rtdb.firebaseio.com \
+  -e FIREBASE_PROJECT_ID=your-firebase-project-id \
+  -e FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@your-project-id.iam.gserviceaccount.com \
+  -e FIREBASE_PRIVATE_KEY='-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n' \
+  -e FIREBASE_DEVICE_ROOT_PATH='users/{owner_uid}/devices' \
   esgators-mcp
 ```
 
@@ -105,6 +109,35 @@ Notes:
 - the hosted MCP service needs network access to your backend, Supabase, and Firebase RTDB
 - hosted platforms often inject `PORT`; `mcpserver.py` now respects that automatically
 - for production, prefer setting secrets in the hosting platform instead of baking them into the image
+- your RTDB rules in [`firebase-rtdb.rules.json`](/home/nicholas/srproj/ESGators_SRProj/firebase-rtdb.rules.json) only allow authenticated reads under `users/<firebase_uid>/...`, so hosted MCP should use Firebase Admin credentials instead of anonymous REST reads
+- the MCP server now supports `FIREBASE_SERVICE_ACCOUNT_JSON` or the split env vars `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY`
+- if your data lives at `users/<firebase_uid>/devices/<deviceId>`, set `FIREBASE_DEVICE_ROOT_PATH=users/{owner_uid}/devices`
+
+## Fly.io Secrets
+
+To deploy the hosted MCP server on Fly with Firebase Admin access, set these secrets on the Fly app:
+
+```bash
+set -a
+source backend/.env
+set +a
+
+fly secrets set -a your-mcp-app-name-winter-thunder-1708 \
+  MCP_BACKEND_BASE_URL=https://backend-bitter-morning-1805.fly.dev \
+  SUPABASE_URL="$SUPABASE_URL" \
+  SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
+  FIREBASE_DATABASE_URL="$FIREBASE_DATABASE_URL" \
+  FIREBASE_PROJECT_ID="$FIREBASE_PROJECT_ID" \
+  FIREBASE_CLIENT_EMAIL="$FIREBASE_CLIENT_EMAIL" \
+  FIREBASE_PRIVATE_KEY="$FIREBASE_PRIVATE_KEY" \
+  FIREBASE_DEVICE_ROOT_PATH='users/{owner_uid}/devices' \
+  MCP_TRANSPORT=streamable-http \
+  MCP_HOST=0.0.0.0 \
+  MCP_PORT=8000 \
+  MCP_PATH=/mcp
+```
+
+If you prefer a single secret instead of split vars, you can also set `FIREBASE_SERVICE_ACCOUNT_JSON` to the full JSON service account payload.
 
 ## ChatGPT Setup
 

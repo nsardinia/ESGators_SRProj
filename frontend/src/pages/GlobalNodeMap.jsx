@@ -7,6 +7,7 @@ import { API_BASE_URL } from "../lib/api"
 import {
   buildNodesWithLocations,
   getResolvedNodeLocations,
+  readActiveOwnedNodeId,
   readStoredNodeLocations,
   writeActiveOwnedNodeId,
   writeStoredNodeLocations,
@@ -14,79 +15,14 @@ import {
 import "./GlobalNodeMap.css"
 
 const GlobalNodeMapCanvas = lazy(() => import("../components/GlobalNodeMapCanvas"))
-const NODE_LOCATION_STORAGE_KEY = "esgators-global-node-locations-v3"
-
-const GAINESVILLE_CLUSTER = {
-  label: "Gainesville, Florida (Near UF)",
-  latitude: 29.6436,
-  longitude: -82.3549,
-}
-
-const SEOUL_CLUSTER = {
-  label: "Seoul, South Korea",
-  latitude: 37.5665,
-  longitude: 126.978,
-}
-
-const SEOUL_OWNER_EMAILS = new Set(["nicholassardinia@ufl.edus", "nicholassardinia@ufl.edu"])
-
-function hashString(value) {
-  return Array.from(String(value || "")).reduce((hash, character) => {
-    return ((hash << 5) - hash + character.charCodeAt(0)) >>> 0
-  }, 0)
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max)
-}
-
-function wrapLongitude(longitude) {
-  let nextLongitude = longitude
-
-  while (nextLongitude < -180) {
-    nextLongitude += 360
-  }
-
-  while (nextLongitude > 180) {
-    nextLongitude -= 360
-  }
-
-  return nextLongitude
-}
-
-function readStoredNodeLocations() {
-  if (typeof window === "undefined") {
-    return {}
-  }
-
-  try {
-    const rawValue = window.localStorage.getItem(NODE_LOCATION_STORAGE_KEY)
-    const parsed = JSON.parse(rawValue || "{}")
-    return parsed && typeof parsed === "object" ? parsed : {}
-  } catch {
-    return {}
-  }
-}
-
-function createStoredLocation(nodeId, cluster) {
-  const hash = hashString(nodeId)
-  const latitudeOffset = ((hash >> 3) % 240) / 10000 - 0.012
-  const longitudeOffset = ((hash >> 11) % 280) / 10000 - 0.014
-
-  return {
-    latitude: clamp(cluster.latitude + latitudeOffset, -70, 70),
-    longitude: wrapLongitude(cluster.longitude + longitudeOffset),
-    label: cluster.label,
-  }
-}
 
 function GlobalNodeMap() {
   const { user } = useAuth()
-  const { createdNodes, error: ownedNodesError, loadingNodes } = useOwnedNodes(user)
+  const { createdNodes, error: ownedNodesError, loadingNodes, warning: ownedNodesWarning } = useOwnedNodes(user)
   const [sharedNodes, setSharedNodes] = useState([])
   const [sharedNodesError, setSharedNodesError] = useState("")
   const [loadingSharedNodes, setLoadingSharedNodes] = useState(false)
-  const [selectedNodeId, setSelectedNodeId] = useState(null)
+  const [selectedNodeId, setSelectedNodeId] = useState(() => readActiveOwnedNodeId() || null)
   const [storedLocations, setStoredLocations] = useState(() => readStoredNodeLocations())
 
   useEffect(() => {
@@ -191,6 +127,30 @@ function GlobalNodeMap() {
   )
   const activeOwnedNodeIndex = sortedOwnedNodes.findIndex((node) => node.deviceId === selectedNodeId)
 
+  useEffect(() => {
+    if (sortedOwnedNodes.length === 0) {
+      if (selectedNodeId) {
+        setSelectedNodeId(null)
+      }
+      writeActiveOwnedNodeId("")
+      return
+    }
+
+    const selectedOwnedNode = sortedOwnedNodes.find((node) => node.deviceId === selectedNodeId)
+
+    if (selectedNodeId && !selectedOwnedNode) {
+      return
+    }
+
+    const nextActiveNodeId = selectedOwnedNode?.deviceId || sortedOwnedNodes[0].deviceId
+
+    if (nextActiveNodeId !== selectedNodeId) {
+      setSelectedNodeId(nextActiveNodeId)
+    }
+
+    writeActiveOwnedNodeId(nextActiveNodeId)
+  }, [selectedNodeId, sortedOwnedNodes])
+
   const focusOwnedNode = (index) => {
     if (sortedOwnedNodes.length === 0) {
       return
@@ -200,6 +160,7 @@ function GlobalNodeMap() {
     const node = sortedOwnedNodes[normalizedIndex]
 
     setSelectedNodeId(node.deviceId)
+    writeActiveOwnedNodeId(node.deviceId)
   }
 
   return (

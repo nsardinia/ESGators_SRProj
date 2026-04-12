@@ -19,6 +19,7 @@ DEFAULT_FIREBASE_DEVICE_ROOT_PATH = "devices"
 DEFAULT_FIREBASE_SOURCE = "firebase-rtdb"
 DEFAULT_BACKEND_BASE_URL = "http://localhost:5000"
 DEFAULT_HISTORY_LIMIT = 200
+DEFAULT_FIREBASE_USER_DEVICE_ROOT_TEMPLATE = "users/{owner_uid}/devices"
 FIREBASE_SENSOR_MAPPINGS = [
     {"bucket": "sht30", "field": "temperatureC", "metric_type": "temperature"},
     {"bucket": "sht30", "field": "humidityPct", "metric_type": "humidity"},
@@ -41,6 +42,7 @@ FIREBASE_TIMESTAMP_MIN_MS = FIREBASE_TIMESTAMP_MIN_SECONDS * 1000
 
 
 mcp = FastMCP(MCP_NAME)
+_FIREBASE_ADMIN_APP = None
 
 
 def _project_root() -> Path:
@@ -90,6 +92,10 @@ def _safe_json_loads(value: str | None, fallback: Any) -> Any:
         return fallback
 
 
+def _normalize_private_key(value: str | None) -> str:
+    return str(value or "").replace("\\n", "\n").strip()
+
+
 def _env_int(name: str, default: int) -> int:
     raw = str(os.environ.get(name, "")).strip()
     if not raw:
@@ -118,6 +124,60 @@ def _firebase_database_url(config: dict[str, str]) -> str:
     return f"https://{project_id}-default-rtdb.firebaseio.com"
 
 
+def _read_service_account_from_env(config: dict[str, str]) -> dict[str, Any] | None:
+    raw_json = str(config.get("FIREBASE_SERVICE_ACCOUNT_JSON") or "").strip()
+    if raw_json:
+        parsed = _safe_json_loads(raw_json, None)
+        if isinstance(parsed, dict):
+            return parsed
+        raise RuntimeError("FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON")
+
+    project_id = str(config.get("FIREBASE_PROJECT_ID") or "").strip()
+    client_email = str(config.get("FIREBASE_CLIENT_EMAIL") or "").strip()
+    private_key = _normalize_private_key(config.get("FIREBASE_PRIVATE_KEY"))
+
+    if not project_id or not client_email or not private_key:
+        return None
+
+    return {
+        "project_id": project_id,
+        "client_email": client_email,
+        "private_key": private_key,
+    }
+
+
+def _firebase_admin_db(config: dict[str, str]):
+    global _FIREBASE_ADMIN_APP
+
+    if _FIREBASE_ADMIN_APP is not None:
+        try:
+            from firebase_admin import db
+
+            return db
+        except ImportError as exc:
+            raise RuntimeError("firebase-admin package is not installed") from exc
+
+    service_account = _read_service_account_from_env(config)
+    if not service_account:
+        return None
+
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, db
+    except ImportError as exc:
+        raise RuntimeError("firebase-admin package is not installed") from exc
+
+    if firebase_admin._apps:
+        _FIREBASE_ADMIN_APP = firebase_admin.get_app()
+        return db
+
+    _FIREBASE_ADMIN_APP = firebase_admin.initialize_app(
+        credentials.Certificate(service_account),
+        {"databaseURL": _firebase_database_url(config)},
+    )
+    return db
+
+
 def _backend_base_url(config: dict[str, str]) -> str:
     return str(config.get("MCP_BACKEND_BASE_URL") or DEFAULT_BACKEND_BASE_URL).strip().rstrip("/")
 
@@ -128,6 +188,13 @@ def _device_root_path(config: dict[str, str]) -> str:
 
 def _firebase_source(config: dict[str, str]) -> str:
     return str(config.get("FIREBASE_SOURCE_NAME") or DEFAULT_FIREBASE_SOURCE).strip()
+
+
+def _firebase_has_admin_credentials(config: dict[str, str]) -> bool:
+    try:
+        return _read_service_account_from_env(config) is not None
+    except RuntimeError:
+        return False
 
 
 def _http_json(
@@ -162,6 +229,31 @@ def _http_json(
 
 def _join_firebase_path(*segments: str) -> str:
     return "/".join(str(segment).strip().strip("/") for segment in segments if str(segment or "").strip())
+
+
+def _expand_device_root_template(template: str, *, device_id: str, owner_uid: str = "") -> str:
+    root = str(template or "").strip().strip("/")
+    if not root:
+        return ""
+
+    replacements = {
+        "{device_id}": device_id,
+        "{owner_uid}": owner_uid,
+        "{ownerFirebaseUid}": owner_uid,
+    }
+    for marker, value in replacements.items():
+        root = root.replace(marker, value)
+
+    return _join_firebase_path(root)
+
+
+def _firebase_device_path_from_root(root: str, *, device_id: str) -> str:
+    normalized_root = _join_firebase_path(root)
+    if not normalized_root:
+        return ""
+    if normalized_root.endswith(f"/{device_id}") or normalized_root == device_id:
+        return normalized_root
+    return _join_firebase_path(normalized_root, device_id)
 
 
 def _normalize_firebase_timestamp(raw_timestamp: Any, fallback_timestamp_ms: int | None = None) -> int:
@@ -324,14 +416,62 @@ def _supabase_select(
 
 
 def _firebase_device_payload(device_id: str, config: dict[str, str]) -> dict[str, Any] | None:
-    device_path = _join_firebase_path(_device_root_path(config), device_id)
-    url = f"{_firebase_database_url(config)}/{device_path}.json"
-    response = _http_json(url)
-    if response is None:
-        return None
-    if not isinstance(response, dict):
-        raise RuntimeError(f"Unexpected Firebase payload at {device_path}")
-    return response
+    metadata = _device_metadata_map([device_id], config).get(device_id, {})
+    owner_uid = str(metadata.get("owner_uid") or "").strip()
+
+    candidate_paths: list[str] = []
+    configured_root = _expand_device_root_template(
+        _device_root_path(config),
+        device_id=device_id,
+        owner_uid=owner_uid,
+    )
+    if configured_root:
+        candidate_paths.append(_firebase_device_path_from_root(configured_root, device_id=device_id))
+
+    if owner_uid:
+        candidate_paths.append(
+            _firebase_device_path_from_root(
+                _expand_device_root_template(
+                    DEFAULT_FIREBASE_USER_DEVICE_ROOT_TEMPLATE,
+                    device_id=device_id,
+                    owner_uid=owner_uid,
+                ),
+                device_id=device_id,
+            )
+        )
+
+    deduped_paths: list[str] = []
+    seen_paths: set[str] = set()
+    for path_value in candidate_paths:
+        normalized = _join_firebase_path(path_value)
+        if normalized and normalized not in seen_paths:
+            seen_paths.add(normalized)
+            deduped_paths.append(normalized)
+
+    admin_db = _firebase_admin_db(config)
+    errors: list[str] = []
+
+    for device_path in deduped_paths:
+        try:
+            if admin_db is not None:
+                response = admin_db.reference(device_path).get()
+            else:
+                url = f"{_firebase_database_url(config)}/{device_path}.json"
+                response = _http_json(url)
+        except Exception as exc:
+            errors.append(f"{device_path}: {exc}")
+            continue
+
+        if response is None:
+            continue
+        if not isinstance(response, dict):
+            raise RuntimeError(f"Unexpected Firebase payload at {device_path}")
+        return response
+
+    if errors:
+        raise RuntimeError("Firebase lookup failed for all candidate paths: " + " | ".join(errors))
+
+    return None
 
 
 def _device_metadata_map(device_ids: list[str], config: dict[str, str]) -> dict[str, dict[str, Any]]:
@@ -498,6 +638,7 @@ def get_mcp_context() -> dict[str, Any]:
         "backend_base_url": _backend_base_url(config),
         "firebase_database_url": _firebase_database_url(config),
         "firebase_device_root_path": _device_root_path(config),
+        "firebase_admin_configured": _firebase_has_admin_credentials(config),
         "firebase_source": _firebase_source(config),
         "has_supabase": bool(str(config.get("SUPABASE_URL") or "").strip() and str(config.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()),
         "supported_metrics": sorted(METRIC_TYPES),

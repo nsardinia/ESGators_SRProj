@@ -34,7 +34,7 @@ function NodeMapPage() {
   const [description, setDescription] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [deletingNodeId, setDeletingNodeId] = useState("")
-  const { createdNodes, error, loadingNodes, setError, syncOwner, reloadNodes } = useOwnedNodes(user)
+  const { createdNodes, error, loadingNodes, warning, setError, syncOwner, reloadNodes } = useOwnedNodes(user)
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
   const filteredNodes = createdNodes.filter((node) => {

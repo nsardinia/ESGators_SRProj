@@ -93,6 +93,7 @@ function useOwnedNodes(user) {
     setLoadingNodes(true)
 
     try {
+      setWarning("")
       const response = await fetch(`${API_BASE_URL}/devices/owned`, {
         headers: await getAuthHeaders(user),
       })
@@ -122,6 +123,7 @@ function useOwnedNodes(user) {
   const reloadNodes = useCallback(async () => {
     if (!user?.uid || !user.email) {
       setCreatedNodes([])
+      setWarning("")
       setOwner(null)
       return
     }
@@ -134,6 +136,7 @@ function useOwnedNodes(user) {
   useEffect(() => {
     if (!user?.uid || !user.email) {
       setCreatedNodes([])
+      setWarning("")
       setOwner(null)
       return
     }
@@ -176,6 +179,8 @@ function useOwnedNodes(user) {
         (snapshot) => {
           const telemetry = snapshot.val()
 
+          setWarning("")
+
           setCreatedNodes((currentNodes) =>
             currentNodes.map((currentNode) => {
               if (currentNode.id !== node.id) {
@@ -192,7 +197,7 @@ function useOwnedNodes(user) {
           )
         },
         () => {
-          setError("Failed to load node data from Firebase")
+          setWarning("Live telemetry is unavailable right now.")
         }
       )
     )
@@ -209,6 +214,7 @@ function useOwnedNodes(user) {
     owner,
     setCreatedNodes,
     setError,
+    warning,
     syncOwner,
     reloadNodes,
   }
