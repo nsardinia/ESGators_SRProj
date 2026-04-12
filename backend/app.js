@@ -29,6 +29,7 @@ const DEFAULT_FIREBASE_DATABASE_URL = `https://${DEFAULT_FIREBASE_PROJECT_ID}-de
 const DEFAULT_FIREBASE_DEVICE_ROOT_PATH = "devices"
 const DEFAULT_FIREBASE_SYNC_INTERVAL_MS = 5000
 const DEFAULT_FIREBASE_OWNER_SYNC_INTERVAL_MS = 1000
+const DEFAULT_OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses"
 const FIREBASE_TIMESTAMP_MIN_SECONDS = 946684800
 const FIREBASE_TIMESTAMP_MIN_MS = FIREBASE_TIMESTAMP_MIN_SECONDS * 1000
 const DEFAULT_DEVICE_OWNER_LABELS = {
@@ -471,6 +472,140 @@ function createApp(options = {}) {
             ownerSyncIntervalMs: Number(
                 process.env.FIREBASE_OWNER_SYNC_INTERVAL_MS || DEFAULT_FIREBASE_OWNER_SYNC_INTERVAL_MS
             ),
+        }
+    }
+
+    function getMcpAssistantConfig() {
+        return {
+            apiKey: String(process.env.OPENAI_API_KEY || "").trim(),
+            apiUrl: String(process.env.OPENAI_API_URL || DEFAULT_OPENAI_RESPONSES_API_URL).trim(),
+            model: String(process.env.OPENAI_MODEL || "gpt-5").trim(),
+            serverUrl: String(process.env.OPENAI_MCP_SERVER_URL || "").trim(),
+            serverLabel: String(process.env.OPENAI_MCP_SERVER_LABEL || "esgators").trim(),
+        }
+    }
+
+    function isMcpAssistantConfigured(config = getMcpAssistantConfig()) {
+        return Boolean(config.apiKey && config.serverUrl)
+    }
+
+    function extractOpenAiText(value) {
+        if (!value) {
+            return ""
+        }
+
+        if (typeof value === "string") {
+            return value.trim()
+        }
+
+        if (Array.isArray(value)) {
+            const combined = value
+                .map((entry) => extractOpenAiText(entry))
+                .filter(Boolean)
+                .join("\n\n")
+
+            return combined.trim()
+        }
+
+        if (typeof value !== "object") {
+            return ""
+        }
+
+        if (typeof value.output_text === "string" && value.output_text.trim()) {
+            return value.output_text.trim()
+        }
+
+        if (typeof value.text === "string" && value.text.trim()) {
+            return value.text.trim()
+        }
+
+        if (typeof value.content === "string" && value.content.trim()) {
+            return value.content.trim()
+        }
+
+        const candidateKeys = ["output", "content", "summary", "message"]
+        for (const key of candidateKeys) {
+            if (value[key]) {
+                const extracted = extractOpenAiText(value[key])
+                if (extracted) {
+                    return extracted
+                }
+            }
+        }
+
+        return ""
+    }
+
+    function buildMcpAssistantPrompt({ question, deviceIds = [], selectedDeviceId = "" }) {
+        const uniqueDeviceIds = [...new Set(
+            (deviceIds || [])
+                .map((deviceId) => String(deviceId || "").trim())
+                .filter(Boolean)
+        )]
+        const selectedLine = selectedDeviceId
+            ? `The user selected device ${selectedDeviceId} as their primary context.`
+            : "The user did not select a single device, so consider all available owned devices."
+        const deviceSummary = uniqueDeviceIds.length > 0
+            ? `The signed-in user currently owns these device IDs: ${uniqueDeviceIds.join(", ")}.`
+            : "No owned device IDs were provided by the frontend, so discover devices through MCP tools if needed."
+
+        return [
+            "You are the ESGators device assistant inside the user's devices page.",
+            "Use the connected ESGators MCP tools to inspect live Firebase data, historical trends, backend status, and anomaly context before answering.",
+            selectedLine,
+            deviceSummary,
+            "Keep the answer concise, practical, and grounded in the available telemetry. If the data is missing or insufficient, say that clearly.",
+            `User question: ${question}`,
+        ].join("\n\n")
+    }
+
+    async function askMcpAssistant({ question, deviceIds = [], selectedDeviceId = "" }) {
+        const config = getMcpAssistantConfig()
+
+        if (!isMcpAssistantConfigured(config)) {
+            const error = new Error(
+                "MCP assistant is not configured. Set OPENAI_API_KEY and OPENAI_MCP_SERVER_URL in backend/.env."
+            )
+            error.statusCode = 503
+            throw error
+        }
+
+        const response = await axios.post(
+            config.apiUrl,
+            {
+                model: config.model,
+                tools: [
+                    {
+                        type: "mcp",
+                        server_label: config.serverLabel,
+                        server_description: "Firebase and Supabase backed IoT sensor context for ESGators.",
+                        server_url: config.serverUrl,
+                        require_approval: "never",
+                    },
+                ],
+                input: buildMcpAssistantPrompt({ question, deviceIds, selectedDeviceId }),
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${config.apiKey}`,
+                    "Content-Type": "application/json",
+                },
+                timeout: 90000,
+                validateStatus: (status) => status >= 200 && status < 300,
+            }
+        )
+
+        const answer = extractOpenAiText(response.data)
+
+        if (!answer) {
+            throw new Error("OpenAI returned a response, but no answer text was found.")
+        }
+
+        return {
+            answer,
+            model: config.model,
+            serverUrl: config.serverUrl,
+            responseId: response.data?.id || null,
         }
     }
 
@@ -1568,6 +1703,53 @@ function createApp(options = {}) {
             recentSamples: state.lastFirebaseSamples,
             ownerSyncStatus: state.firebaseOwnerSyncStatus,
         })
+    })
+
+    app.get("/mcp/status", async (req, res) => {
+        const config = getMcpAssistantConfig()
+
+        res.json({
+            configured: isMcpAssistantConfigured(config),
+            model: config.model,
+            serverUrl: config.serverUrl,
+            warning: isMcpAssistantConfigured(config)
+                ? ""
+                : "Set OPENAI_API_KEY and OPENAI_MCP_SERVER_URL in backend/.env to enable the devices-page assistant.",
+        })
+    })
+
+    app.post("/mcp/ask", async (req, res) => {
+        try {
+            const question = String(req.body?.question || "").trim()
+            const selectedDeviceId = String(req.body?.selectedDeviceId || "").trim()
+            const deviceIds = Array.isArray(req.body?.deviceIds) ? req.body.deviceIds : []
+
+            if (!question) {
+                res.status(400).json({ error: "question is required" })
+                return
+            }
+
+            const result = await askMcpAssistant({
+                question,
+                selectedDeviceId,
+                deviceIds,
+            })
+
+            res.json({
+                status: "success",
+                ...result,
+            })
+        } catch (error) {
+            const statusCode = Number(error?.statusCode) || Number(error?.response?.status) || 500
+            const detail = error?.response?.data
+                ? (typeof error.response.data === "string" ? error.response.data : JSON.stringify(error.response.data))
+                : error.message
+
+            res.status(statusCode).json({
+                error: "Failed to ask MCP assistant",
+                detail,
+            })
+        }
     })
 
     app.get("/firebase/preview/:deviceId", async (req, res) => {

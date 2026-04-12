@@ -116,7 +116,9 @@ async function createTestServer(options = {}) {
         supabase: null,
         ...options,
     })
-    await new Promise((resolve) => runtime.server.once("listening", resolve))
+    if (!runtime.server.listening) {
+        await new Promise((resolve) => runtime.server.once("listening", resolve))
+    }
     const address = runtime.server.address()
     const baseUrl = `http://127.0.0.1:${address.port}`
 
@@ -620,5 +622,72 @@ test("firebase sync skips instead of failing when root devices path is denied an
         assert.deepEqual(body.devices, [])
     } finally {
         await server.close()
+    }
+})
+
+test("mcp status reports setup warning when OpenAI MCP env is missing", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY
+    const originalServerUrl = process.env.OPENAI_MCP_SERVER_URL
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_MCP_SERVER_URL
+
+    const server = await createTestServer()
+
+    try {
+        const response = await fetch(`${server.baseUrl}/mcp/status`)
+        assert.equal(response.status, 200)
+
+        const body = await response.json()
+        assert.equal(body.configured, false)
+        assert.match(body.warning, /OPENAI_API_KEY/)
+    } finally {
+        await server.close()
+        if (originalApiKey === undefined) {
+            delete process.env.OPENAI_API_KEY
+        } else {
+            process.env.OPENAI_API_KEY = originalApiKey
+        }
+        if (originalServerUrl === undefined) {
+            delete process.env.OPENAI_MCP_SERVER_URL
+        } else {
+            process.env.OPENAI_MCP_SERVER_URL = originalServerUrl
+        }
+    }
+})
+
+test("mcp ask returns 503 when OpenAI MCP env is missing", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY
+    const originalServerUrl = process.env.OPENAI_MCP_SERVER_URL
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_MCP_SERVER_URL
+
+    const server = await createTestServer()
+
+    try {
+        const response = await fetch(`${server.baseUrl}/mcp/ask`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                question: "Which device looks unhealthy?",
+                deviceIds: ["dev_alpha"],
+                selectedDeviceId: "dev_alpha",
+            }),
+        })
+
+        assert.equal(response.status, 503)
+        const body = await response.json()
+        assert.match(body.detail, /OPENAI_API_KEY/)
+    } finally {
+        await server.close()
+        if (originalApiKey === undefined) {
+            delete process.env.OPENAI_API_KEY
+        } else {
+            process.env.OPENAI_API_KEY = originalApiKey
+        }
+        if (originalServerUrl === undefined) {
+            delete process.env.OPENAI_MCP_SERVER_URL
+        } else {
+            process.env.OPENAI_MCP_SERVER_URL = originalServerUrl
+        }
     }
 })
