@@ -700,6 +700,82 @@ test("firebase sync endpoint only ingests devices owned by the requested ownerUi
     }
 })
 
+test("firebase sync resolves firebase_uid through MWBE when Supabase is unavailable", async () => {
+    const ownerId = "3f913820-5560-414d-b15b-5cb84f0e2e11"
+    const ownerFirebaseUid = "C7q0dcT3nggvPiw7G8qZBs6Bpy52"
+    const deviceId = "dev_mwbe_owner_lookup"
+    const firebaseDb = createMockFirebaseDb({
+        [`users/${ownerFirebaseUid}/devices/${deviceId}`]: {
+            sht30: {
+                latest: {
+                    deviceId,
+                    temperatureC: 21.75,
+                    humidityPct: 46.25,
+                    updatedAtMs: 1234,
+                },
+            },
+        },
+    })
+    const mwbeHttpClient = async (request) => {
+        const normalizedUrl = String(request?.url || "")
+
+        if (normalizedUrl.endsWith("/users")) {
+            return {
+                data: {
+                    users: [
+                        {
+                            id: ownerId,
+                            email: "nicholassardinia@ufl.edu",
+                            name: "Bob Developer",
+                            firebase_uid: ownerFirebaseUid,
+                        },
+                    ],
+                },
+            }
+        }
+
+        if (normalizedUrl.endsWith("/devices/owned")) {
+            assert.equal(request?.params?.ownerUid, ownerId)
+
+            return {
+                data: {
+                    devices: [
+                        {
+                            deviceId,
+                            name: "MWBE fallback node",
+                            description: "fallback lookup",
+                            status: "active",
+                        },
+                    ],
+                },
+            }
+        }
+
+        throw new Error(`Unhandled MWBE request: ${normalizedUrl}`)
+    }
+    const server = await createTestServer({ firebaseDb, supabase: null, mwbeHttpClient })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/firebase/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ownerUid: ownerId }),
+        })
+
+        assert.equal(response.status, 200)
+        const body = await response.json()
+
+        assert.equal(body.ownerUid, ownerFirebaseUid)
+        assert.equal(body.deviceCount, 1)
+        assert.equal(body.accepted, 2)
+        assert.equal(body.path, `users/${ownerFirebaseUid}/devices`)
+        assert.deepEqual(body.devices.map((device) => device.deviceId), [deviceId])
+        assert.ok(body.samples.every((sample) => sample.sensor_id === deviceId))
+    } finally {
+        await server.close()
+    }
+})
+
 test("firebase sync skips unchanged samples on subsequent polls", async () => {
     const deviceId = "dev_repeat_same_value"
     const ownerUid = "firebase-user-repeat"

@@ -37,6 +37,7 @@ const DEFAULT_FIREBASE_PROJECT_ID = "senior-project-esgators"
 const DEFAULT_FIREBASE_DATABASE_URL = `https://${DEFAULT_FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com`
 const DEFAULT_FIREBASE_DEVICE_ROOT_PATH = "users"
 const FIREBASE_USER_DEVICES_PATH_SEGMENT = "devices"
+const DEFAULT_MWBE_API_BASE_URL = "https://srprojmwbe.fly.dev"
 const DEFAULT_FIREBASE_SYNC_INTERVAL_MS = 5000
 const DEFAULT_FIREBASE_OWNER_SYNC_INTERVAL_MS = 1000
 const DEFAULT_OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses"
@@ -215,6 +216,11 @@ async function verifyFirebaseUserFromRequest(req) {
 function normalizeKalshiBaseUrl(value) {
     const normalized = String(value || "").trim().replace(/\/+$/, "")
     return normalized || DEFAULT_KALSHI_BASE_URL
+}
+
+function normalizeBaseUrl(value, fallback = "") {
+    const normalized = String(value || "").trim().replace(/\/+$/, "")
+    return normalized || fallback
 }
 
 function getKalshiConfig() {
@@ -890,10 +896,24 @@ function normalizeDeviceOwnerLabels(metadata = {}) {
     }
 }
 
+function normalizeMwbeUserRecord(userRecord = {}) {
+    return {
+        id: String(userRecord.id || "").trim(),
+        email: String(userRecord.email || "").trim(),
+        name: String(userRecord.name || "").trim(),
+        firebase_uid: String(
+            userRecord.firebase_uid
+            || userRecord.firebaseUid
+            || ""
+        ).trim(),
+    }
+}
+
 function createApp(options = {}) {
     const firebaseDb = options.firebaseDb === undefined ? db : options.firebaseDb
     const supabase = options.supabase === undefined ? createSupabaseFromEnv() : options.supabase
     const kalshiHttpClient = options.kalshiHttpClient || axios
+    const mwbeHttpClient = options.mwbeHttpClient || axios
     const app = express()
     const registry = new promClient.Registry()
     const state = {
@@ -1941,8 +1961,27 @@ function createApp(options = {}) {
     }
 
     function getMwbeConfig() {
+        const configuredBaseUrl = String(
+            process.env.MWBE_API_BASE_URL
+            || process.env.VITE_MWBE_API_BASE_URL
+            || ""
+        ).trim()
+        const fallbackBaseUrl = configuredBaseUrl
+            || (
+                String(process.env.MWBE_API_URL || "").trim()
+                    ? (() => {
+                        try {
+                            return new URL(String(process.env.MWBE_API_URL).trim()).origin
+                        } catch {
+                            return ""
+                        }
+                    })()
+                    : ""
+            )
+
         return {
             url: process.env.MWBE_API_URL || "",
+            baseUrl: normalizeBaseUrl(fallbackBaseUrl, DEFAULT_MWBE_API_BASE_URL),
             method: String(process.env.MWBE_API_METHOD || "GET").toUpperCase(),
             timeoutMs: Number(process.env.MWBE_API_TIMEOUT_MS || 10000),
             headers: parseJsonEnv(process.env.MWBE_API_HEADERS_JSON, {}),
@@ -2241,11 +2280,76 @@ function createApp(options = {}) {
         return response.data
     }
 
+    async function callMwbeApi({ endpointPath, method = "GET", params = {} }) {
+        const config = getMwbeConfig()
+        const baseUrl = normalizeBaseUrl(config.baseUrl, DEFAULT_MWBE_API_BASE_URL)
+
+        if (!baseUrl) {
+            throw new Error("MWBE API base URL is not configured")
+        }
+
+        const url = new URL(
+            String(endpointPath || "").startsWith("/")
+                ? `${baseUrl}${endpointPath}`
+                : `${baseUrl}/${String(endpointPath || "").replace(/^\/+/, "")}`
+        )
+        const response = await mwbeHttpClient({
+            method,
+            url: url.toString(),
+            params,
+            timeout: config.timeoutMs,
+            validateStatus: (status) => status >= 200 && status < 300,
+        })
+
+        return response.data
+    }
+
+    async function loadOwnerRecordFromMwbe(ownerUid) {
+        const normalizedOwnerUid = String(ownerUid || "").trim()
+
+        if (!normalizedOwnerUid) {
+            return null
+        }
+
+        const payload = await callMwbeApi({
+            endpointPath: "/users",
+        })
+        const users = Array.isArray(payload?.users) ? payload.users : []
+        const matchedUser = users
+            .map((user) => normalizeMwbeUserRecord(user))
+            .find((user) => user.id === normalizedOwnerUid || user.firebase_uid === normalizedOwnerUid)
+
+        return matchedUser || null
+    }
+
+    async function loadOwnedFirebaseDeviceIdsFromMwbe(ownerUid) {
+        const normalizedOwnerUid = String(ownerUid || "").trim()
+
+        if (!normalizedOwnerUid) {
+            return []
+        }
+
+        const payload = await callMwbeApi({
+            endpointPath: "/devices/owned",
+            params: { ownerUid: normalizedOwnerUid },
+        })
+
+        return [...new Set(
+            (Array.isArray(payload?.devices) ? payload.devices : [])
+                .map((device) => String(device?.deviceId || "").trim())
+                .filter(Boolean)
+        )]
+    }
+
     async function loadOwnerRecord(ownerUid) {
         const normalizedOwnerUid = String(ownerUid || "").trim()
 
-        if (!normalizedOwnerUid || !supabase) {
+        if (!normalizedOwnerUid) {
             return null
+        }
+
+        if (!supabase) {
+            return loadOwnerRecordFromMwbe(normalizedOwnerUid)
         }
 
         const ownerQuery = supabase
@@ -2257,10 +2361,15 @@ function createApp(options = {}) {
             : await ownerQuery.eq("firebase_uid", normalizedOwnerUid).maybeSingle()
 
         if (error) {
-            throw new Error(`Failed to load owner user ${normalizedOwnerUid}: ${error.message}`)
+            console.warn(`Failed to load owner user ${normalizedOwnerUid} from Supabase: ${error.message}`)
+            return loadOwnerRecordFromMwbe(normalizedOwnerUid)
         }
 
-        return data || null
+        if (data) {
+            return data
+        }
+
+        return loadOwnerRecordFromMwbe(normalizedOwnerUid)
     }
 
     async function resolveFirebaseOwnerUid(ownerUid) {
@@ -2286,7 +2395,7 @@ function createApp(options = {}) {
         }
 
         if (!supabase) {
-            throw new Error("Supabase is not configured")
+            return loadOwnedFirebaseDeviceIdsFromMwbe(normalizedOwnerUid)
         }
 
         const owner = await loadOwnerRecord(normalizedOwnerUid)
@@ -2302,14 +2411,21 @@ function createApp(options = {}) {
             .in("owner_uid", ownerKeys)
 
         if (error) {
-            throw new Error(`Failed to load devices for owner ${normalizedOwnerUid}: ${error.message}`)
+            console.warn(`Failed to load devices for owner ${normalizedOwnerUid} from Supabase: ${error.message}`)
+            return loadOwnedFirebaseDeviceIdsFromMwbe(owner?.firebase_uid || normalizedOwnerUid)
         }
 
-        return [...new Set(
+        const deviceIds = [...new Set(
             (data || [])
                 .map((device) => String(device?.device_id || "").trim())
                 .filter(Boolean)
         )]
+
+        if (deviceIds.length > 0) {
+            return deviceIds
+        }
+
+        return loadOwnedFirebaseDeviceIdsFromMwbe(owner?.firebase_uid || normalizedOwnerUid)
     }
 
     async function loadKnownFirebaseDeviceIds() {

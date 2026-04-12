@@ -29,6 +29,7 @@ Optional for Prometheus scraping:
 
 Optional MWBE sync config:
 - `MWBE_API_URL`
+- `MWBE_API_BASE_URL`
 - `MWBE_API_METHOD`
 - `MWBE_API_TIMEOUT_MS`
 - `MWBE_API_HEADERS_JSON`
@@ -98,6 +99,7 @@ GRAFANA_API_KEY=glc_xxx
 GRAFANA_PUSH_URL=https://prometheus-prod-xx.grafana.net/api/prom/push
 
 MWBE_API_URL=http://localhost:3000/api/sensors/latest
+MWBE_API_BASE_URL=http://localhost:3000
 MWBE_API_METHOD=GET
 MWBE_API_RESPONSE_PATH=data.items
 MWBE_API_SENSOR_ID_FIELD=sensor_id
