@@ -92,6 +92,7 @@ function GlobalNodeMapCanvas({
   const mapRef = useRef(null)
   const hasAutoFramedOwnedNodes = useRef(false)
   const [popupPlacement, setPopupPlacement] = useState({ anchor: "top", offset: 18 })
+  const selectedNodeId = selectedNode?.deviceId || null
 
   useEffect(() => {
     const mapInstance = mapRef.current?.getMap?.()
@@ -139,13 +140,14 @@ function GlobalNodeMapCanvas({
       return
     }
 
+    // Keep focus behavior tied to intentional selection changes, not telemetry refreshes.
     mapRef.current.flyTo({
       center: [selectedNode.longitude, selectedNode.latitude],
       zoom: 12.8,
       duration: 900,
       essential: true,
     })
-  }, [selectedNode])
+  }, [selectedNodeId])
 
   return (
     <div className="global-node-map-frame">
