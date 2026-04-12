@@ -2,6 +2,49 @@
 
 namespace srproj {
 
+namespace {
+
+struct FirebaseThrottleSlot {
+  bool inUse;
+  bool isTx;
+  uint8_t nodeId;
+  char deviceId[MAX_DEVICE_ID_LEN];
+  uint32_t lastQueuedAtMs;
+};
+
+FirebaseThrottleSlot firebaseThrottleSlots[MAX_NETWORK_NODES * 2] = {};
+
+FirebaseThrottleSlot& selectFirebaseThrottleSlot(bool isTx, uint8_t nodeId, const char* deviceId) {
+  FirebaseThrottleSlot* emptySlot = nullptr;
+  for (FirebaseThrottleSlot& slot : firebaseThrottleSlots) {
+    if (!slot.inUse) {
+      if (emptySlot == nullptr) emptySlot = &slot;
+      continue;
+    }
+    if (slot.isTx == isTx && slot.nodeId == nodeId && textEquals(slot.deviceId, deviceId)) return slot;
+  }
+
+  FirebaseThrottleSlot& slot = emptySlot != nullptr ? *emptySlot : firebaseThrottleSlots[0];
+  slot.inUse = true;
+  slot.isTx = isTx;
+  slot.nodeId = nodeId;
+  copyDeviceId(slot.deviceId, sizeof(slot.deviceId), deviceId);
+  slot.lastQueuedAtMs = 0;
+  return slot;
+}
+
+bool shouldQueueFirebaseUploadEvent(bool isTx, const MeshPacketPayload& payload, uint32_t eventAtMs) {
+  FirebaseThrottleSlot& slot = selectFirebaseThrottleSlot(isTx, payload.nodeId, payload.deviceId);
+  if (slot.lastQueuedAtMs != 0 &&
+      eventAtMs - slot.lastQueuedAtMs < FIREBASE_UPLOAD_MIN_INTERVAL_MS) {
+    return false;
+  }
+  slot.lastQueuedAtMs = eventAtMs;
+  return true;
+}
+
+}  // namespace
+
 bool isHttpsUrl(const String& url) {
   return url.startsWith("https://");
 }
@@ -459,13 +502,14 @@ bool uploadReadingEvent(const GatewayReading& msg) {
   if (!writeJsonByPath(gatewayDeviceBasePath + "/gatewayReadings/latest", payload)) return false;
   if (msg.isTx) return writeSensorBucketPayloads(gatewayDeviceBasePath, msg);
 
-  String clientKey = strlen(msg.sourceDeviceId) > 0 ? String(msg.sourceDeviceId) : String("node_") + String(msg.nodeId);
-  if (!writeJsonByPath(gatewayDeviceBasePath + "/clients/" + clientKey + "/readings/latest", payload)) return false;
+  const String sourceDeviceBasePath = firebaseDeviceBasePath(String(msg.sourceDeviceId));
+  if (sourceDeviceBasePath.isEmpty()) return false;
+  if (!writeJsonByPath(sourceDeviceBasePath + "/readings/latest", payload)) return false;
 
   const String historyKey = String(msg.eventAtMs) + "_" + String(static_cast<unsigned long>(msg.counter));
-  if (!writeJsonByPath(gatewayDeviceBasePath + "/clients/" + clientKey + "/readings/history/" + historyKey, payload)) return false;
-  if (!writeJsonByPath(gatewayDeviceBasePath + "/" + clientKey + "/readings", payload)) return false;
-  return writeSensorBucketPayloads(gatewayDeviceBasePath + "/clients/" + clientKey, msg);
+  if (!writeJsonByPath(sourceDeviceBasePath + "/readings/history/" + historyKey, payload)) return false;
+  if (!writeJsonByPath(sourceDeviceBasePath + "/readings", payload)) return false;
+  return writeSensorBucketPayloads(sourceDeviceBasePath, msg);
 }
 
 bool uploadMeshStatusSnapshot(uint32_t now) {
@@ -522,6 +566,7 @@ bool uploadMeshStatusSnapshot(uint32_t now) {
 void queueFirebaseUploadEvent(bool isTx, uint16_t peerAddr, const MeshPacketPayload& payload, uint32_t eventAtMs) {
   if (firebaseQueue == nullptr) return;
   if (getNodeRole() != NodeRole::Gateway && !shouldUploadDirectToFirebase()) return;
+  if (!shouldQueueFirebaseUploadEvent(isTx, payload, eventAtMs)) return;
 
   GatewayReading event = {};
   event.isTx = isTx;

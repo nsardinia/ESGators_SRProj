@@ -180,7 +180,15 @@ void applyRoleChangeIfPending() {
 }
 
 void emitTxByRole(uint32_t now) {
-  if (!radioConfigLoaded) return;
+  if (!radioConfigLoaded) {
+    static uint32_t lastAwaitingConfigLogMs = 0;
+    if (now - lastAwaitingConfigLogMs >= 3000) {
+      Serial.printf("TX skip role=%s node=%u reason=awaiting-config\n",
+                    nodeRoleName(getNodeRole()), static_cast<unsigned int>(thisNodeId()));
+      lastAwaitingConfigLogMs = now;
+    }
+    return;
+  }
 
   const uint32_t interval = getNodeRole() == NodeRole::Gateway ? GATEWAY_SEND_INTERVAL_MS : CLIENT_SEND_INTERVAL_MS;
   if (now - lastSendMs < interval) return;
@@ -208,15 +216,40 @@ void emitTxByRole(uint32_t now) {
   }
 
   if (shouldUploadDirectToFirebase()) {
+    Serial.printf("TX wifi-direct role=%s node=%u counter=%lu reading=%ld dev=%s\n",
+                  nodeRoleName(getNodeRole()), static_cast<unsigned int>(payload.nodeId),
+                  static_cast<unsigned long>(payload.counter), static_cast<long>(payload.readingRaw),
+                  payload.deviceId);
     queueFirebaseUploadEvent(true, 0, payload, now);
     lastSendMs = now;
     return;
   }
-  if (!shouldUseRadioNetwork()) return;
+  if (!shouldUseRadioNetwork()) {
+    static uint32_t lastNoRadioLogMs = 0;
+    if (now - lastNoRadioLogMs >= 3000) {
+      Serial.printf("TX skip role=%s node=%u reason=radio-disabled cfgLoaded=%u\n",
+                    nodeRoleName(getNodeRole()), static_cast<unsigned int>(thisNodeId()),
+                    radioConfigLoaded ? 1U : 0U);
+      lastNoRadioLogMs = now;
+    }
+    return;
+  }
 
   bool reliable = false;
   const uint16_t dest = chooseDestination(reliable);
-  if (dest == 0) return;
+  if (dest == 0) {
+    Serial.printf("TX skip role=%s local=0x%X node=%u counter=%lu reason=no-destination prefGw=%u prefDev=%s fbGw=%u fbDev=%s\n",
+                  nodeRoleName(getNodeRole()), localAddr, static_cast<unsigned int>(payload.nodeId),
+                  static_cast<unsigned long>(payload.counter), static_cast<unsigned int>(preferredGatewayNodeId),
+                  preferredGatewayDeviceId, static_cast<unsigned int>(fallbackGatewayNodeId),
+                  fallbackGatewayDeviceId);
+    return;
+  }
+  Serial.printf("TX %s local=0x%X -> dst=0x%X node=%u counter=%lu reading=%ld dev=%s cfgV=%u reliable=%u prefGw=%u fbGw=%u\n",
+                nodeRoleName(getNodeRole()), localAddr, dest, static_cast<unsigned int>(payload.nodeId),
+                static_cast<unsigned long>(payload.counter), static_cast<long>(payload.readingRaw),
+                payload.deviceId, static_cast<unsigned int>(payload.configVersion), reliable ? 1U : 0U,
+                static_cast<unsigned int>(preferredGatewayNodeId), static_cast<unsigned int>(fallbackGatewayNodeId));
   if (reliable) radio.sendReliable(dest, &payload, 1);
   else radio.createPacketAndSend(dest, &payload, 1);
 

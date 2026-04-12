@@ -65,6 +65,7 @@ extern const uint32_t UPLOAD_RETRY_MS;
 extern const uint32_t HTTP_CONNECT_TIMEOUT_MS;
 extern const uint32_t HTTP_TIMEOUT_MS;
 extern const size_t FIREBASE_QUEUE_LEN;
+extern const uint32_t FIREBASE_UPLOAD_MIN_INTERVAL_MS;
 extern const uint32_t MESH_STATUS_PUBLISH_INTERVAL_MS;
 extern const uint32_t NODE_STALE_TIMEOUT_MS;
 extern const uint32_t FIREBASE_TASK_STACK_BYTES;

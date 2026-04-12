@@ -4,7 +4,7 @@
 
 namespace srproj {
 
-static const size_t MAX_DEVICE_ID_LEN = 64;
+static const size_t MAX_DEVICE_ID_LEN = 48;
 static const size_t MAX_NETWORK_NODES = 32;
 static const size_t MAX_GATEWAYS = 8;
 
