@@ -5,15 +5,21 @@
  *
  * Last Edit: Nicholas Sardinia, 3/1/2026
  */
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Button from "../components/ui/button"
 import { Card, CardContent } from "../components/ui/card"
 import DeviceMcpAssistant from "../components/DeviceMcpAssistant"
 import Input from "../components/ui/input"
 import Textarea from "../components/ui/textarea"
 import { useAuth } from "../components/AuthContext"
+import NodeLocationPicker from "../components/NodeLocationPicker"
 import useOwnedNodes from "../hooks/useOwnedNodes"
 import { API_BASE_URL, MWBE_API_BASE_URL, getAuthHeaders } from "../lib/api"
+import {
+  buildNodesWithLocations,
+  formatCoordinateLabel,
+  normalizeStoredLocation,
+} from "../lib/nodeLocations"
 import "./NodeMapPage.css"
 
 function formatLastUpdate(updatedAtMs) {
@@ -32,17 +38,29 @@ function NodeMapPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
+  const [latitudeInput, setLatitudeInput] = useState("")
+  const [longitudeInput, setLongitudeInput] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [deletingNodeId, setDeletingNodeId] = useState("")
   const { createdNodes, error, loadingNodes, warning, setError, syncOwner, reloadNodes } = useOwnedNodes(user)
 
+  const selectedLatitude = latitudeInput.trim() === "" ? null : Number(latitudeInput)
+  const selectedLongitude = longitudeInput.trim() === "" ? null : Number(longitudeInput)
+  const hasValidLocationSelection = normalizeStoredLocation({
+    latitude: selectedLatitude,
+    longitude: selectedLongitude,
+  })
+  const nodesWithLocations = useMemo(() => {
+    return buildNodesWithLocations(createdNodes).nodes
+  }, [createdNodes])
+
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
-  const filteredNodes = createdNodes.filter((node) => {
+  const filteredNodes = nodesWithLocations.filter((node) => {
     if (!normalizedSearchQuery) {
       return true
     }
 
-    return [node.name, node.description, node.id].some((value) =>
+    return [node.name, node.description, node.id, node.locationLabel].some((value) =>
       String(value || "").toLowerCase().includes(normalizedSearchQuery)
     )
   })
@@ -60,6 +78,14 @@ function NodeMapPage() {
     setIsFormOpen(false)
     setName("")
     setDescription("")
+    setLatitudeInput("")
+    setLongitudeInput("")
+    setError("")
+  }
+
+  const handleSelectLocation = ({ latitude, longitude }) => {
+    setLatitudeInput(latitude.toFixed(6))
+    setLongitudeInput(longitude.toFixed(6))
     setError("")
   }
 
@@ -73,6 +99,11 @@ function NodeMapPage() {
 
     if (!user.email) {
       setError("Your account needs an email address before a node can be created.")
+      return
+    }
+
+    if (!hasValidLocationSelection) {
+      setError("Select a node location on the map or enter valid latitude and longitude values.")
       return
     }
 
@@ -90,6 +121,10 @@ function NodeMapPage() {
         body: JSON.stringify({
           name: name.trim(),
           description: description.trim(),
+          latitude: hasValidLocationSelection.latitude,
+          longitude: hasValidLocationSelection.longitude,
+          locationLabel: formatCoordinateLabel(hasValidLocationSelection.latitude, hasValidLocationSelection.longitude),
+          isLocationUnknown: false,
         }),
       })
 
@@ -233,6 +268,13 @@ function NodeMapPage() {
                   <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{node.id}</dd>
                 </div>
                 <div>
+                  <dt className="mb-1 text-[0.72rem] uppercase tracking-[0.08em] text-[#b4c2d8]">Location</dt>
+                  <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">
+                    {node.locationLabel}
+                    {node.isLocationUnknown ? " (unknown)" : ""}
+                  </dd>
+                </div>
+                <div>
                   <dt className="mb-1 text-[0.72rem] uppercase tracking-[0.08em] text-[#b4c2d8]">Status</dt>
                   <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{node.status || "Unknown"}</dd>
                 </div>
@@ -251,8 +293,12 @@ function NodeMapPage() {
                       <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{node.telemetry.humidityPct ?? "N/A"}%</dd>
                     </div>
                     <div>
-                      <dt className="mb-1 text-[0.72rem] uppercase tracking-[0.08em] text-[#b4c2d8]">Battery</dt>
-                      <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{node.telemetry.batteryVolts ?? "N/A"} V</dd>
+                      <dt className="mb-1 text-[0.72rem] uppercase tracking-[0.08em] text-[#b4c2d8]">NO2</dt>
+                      <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{node.telemetry.no2 ?? "N/A"}</dd>
+                    </div>
+                    <div>
+                      <dt className="mb-1 text-[0.72rem] uppercase tracking-[0.08em] text-[#b4c2d8]">Sound Level</dt>
+                      <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{node.telemetry.soundLevel ?? "N/A"} dB</dd>
                     </div>
                   </>
                 )}
@@ -278,19 +324,19 @@ function NodeMapPage() {
       {isFormOpen && (
         <div className="node-modal-backdrop" role="presentation" onClick={handleCloseForm}>
           <Card
-            className="node-modal"
+            className="node-modal node-modal-setup"
             role="dialog"
             aria-modal="true"
             aria-labelledby="create-node-title"
             onClick={(event) => event.stopPropagation()}
           >
-            <CardContent className="p-6">
+            <CardContent className="node-modal-content p-6">
               <p className="mb-[10px] pt-2 text-base font-bold uppercase tracking-[0.08em] text-[var(--muted)]">Node Setup</p>
               <h2 id="create-node-title" className="mb-2 text-[clamp(1.4rem,2.4vw,2rem)] font-semibold">
                 Create a node
               </h2>
               <p className="mb-[18px] text-base font-medium text-[var(--muted)]">
-                Submit the node details and the backend will generate a node ID and API secret.
+                Submit the node details, choose its map position, and the backend will generate a node ID and API secret.
               </p>
 
               <form className="flex flex-col gap-3" onSubmit={handleSubmit}>
@@ -318,6 +364,60 @@ function NodeMapPage() {
                   />
                 </label>
 
+                <div className="node-location-fieldset">
+                  <div className="node-location-fieldset-header">
+                    <div>
+                      <span className="node-location-fieldset-title">Node location</span>
+                      <p className="node-location-fieldset-copy">
+                        Choose a point on the map or enter latitude and longitude manually. This is required for node placement.
+                      </p>
+                    </div>
+                    <div className="node-location-fieldset-status">
+                      {hasValidLocationSelection
+                        ? `Selected: ${formatCoordinateLabel(hasValidLocationSelection.latitude, hasValidLocationSelection.longitude)}`
+                        : "No location selected yet"}
+                    </div>
+                  </div>
+
+                  <div className="node-location-input-grid">
+                    <label className="flex flex-col gap-[7px] text-[0.86rem] text-[var(--muted)]">
+                      <span>Latitude</span>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        step="any"
+                        min="-90"
+                        max="90"
+                        value={latitudeInput}
+                        onChange={(event) => setLatitudeInput(event.target.value)}
+                        placeholder="29.6516"
+                        required
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-[7px] text-[0.86rem] text-[var(--muted)]">
+                      <span>Longitude</span>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        step="any"
+                        min="-180"
+                        max="180"
+                        value={longitudeInput}
+                        onChange={(event) => setLongitudeInput(event.target.value)}
+                        placeholder="-82.3248"
+                        required
+                      />
+                    </label>
+                  </div>
+
+                  <NodeLocationPicker
+                    latitude={hasValidLocationSelection?.latitude ?? null}
+                    longitude={hasValidLocationSelection?.longitude ?? null}
+                    onSelectLocation={handleSelectLocation}
+                  />
+                </div>
+
                 {error && <p className="m-0 text-[0.86rem] text-[#fca5a5]">{error}</p>}
 
                 <div className="node-modal-actions">
@@ -342,7 +442,7 @@ function NodeMapPage() {
             aria-modal="true"
             aria-labelledby="node-secret-title"
           >
-            <CardContent className="p-6">
+            <CardContent className="node-modal-content p-6">
               <p className="mb-[10px] pt-2 text-base font-bold uppercase tracking-[0.08em] text-[var(--muted)]">Secret Key</p>
               <h2 id="node-secret-title" className="mb-2 text-[clamp(1.4rem,2.4vw,2rem)] font-semibold">
                 Save this API secret now

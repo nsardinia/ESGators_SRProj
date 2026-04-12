@@ -6,6 +6,7 @@ backend/.env
 firebaseServiceKeys.json
 backend/kalshi*.key
 backend/kalshi*.pem
+backend/kalshiPrivate.txt
 .history/
 frontend/.history/
 mwbe/.history/

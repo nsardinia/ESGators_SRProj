@@ -969,6 +969,12 @@ def _parse_args() -> argparse.Namespace:
         help="HTTP path for streamable-http or sse transports.",
     )
     parser.add_argument(
+        "--stateless-http",
+        action="store_true",
+        default=str(os.environ.get("FASTMCP_STATELESS_HTTP", "")).strip().lower() in {"1", "true", "yes", "on"},
+        help="Enable stateless HTTP mode for hosted MCP clients.",
+    )
+    parser.add_argument(
         "--no-banner",
         action="store_true",
         help="Disable the FastMCP startup banner.",
@@ -988,5 +994,6 @@ if __name__ == "__main__":
             host=args.host,
             port=args.port,
             path=args.path,
+            stateless_http=args.stateless_http if args.transport in {"http", "streamable-http"} else None,
             show_banner=show_banner,
         )

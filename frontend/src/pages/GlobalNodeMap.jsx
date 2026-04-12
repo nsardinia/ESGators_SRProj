@@ -6,11 +6,8 @@ import useOwnedNodes from "../hooks/useOwnedNodes"
 import { API_BASE_URL } from "../lib/api"
 import {
   buildNodesWithLocations,
-  getResolvedNodeLocations,
   readActiveOwnedNodeId,
-  readStoredNodeLocations,
   writeActiveOwnedNodeId,
-  writeStoredNodeLocations,
 } from "../lib/nodeLocations"
 import "./GlobalNodeMap.css"
 
@@ -23,7 +20,6 @@ function GlobalNodeMap() {
   const [sharedNodesError, setSharedNodesError] = useState("")
   const [loadingSharedNodes, setLoadingSharedNodes] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState(() => readActiveOwnedNodeId() || null)
-  const [storedLocations, setStoredLocations] = useState(() => readStoredNodeLocations())
 
   useEffect(() => {
     if (!user?.uid || !user.email) {
@@ -93,27 +89,9 @@ function GlobalNodeMap() {
     return [...ownedMapNodes, ...sharedNodes]
   }, [createdNodes, sharedNodes, user])
 
-  useEffect(() => {
-    if (mapNodes.length === 0) {
-      return
-    }
-
-    setStoredLocations((currentLocations) => {
-      const { locations: nextLocations, didChange } = getResolvedNodeLocations(mapNodes, currentLocations)
-
-      if (!didChange) {
-        return currentLocations
-      }
-
-      writeStoredNodeLocations(nextLocations)
-
-      return nextLocations
-    })
-  }, [mapNodes])
-
   const nodesWithLocations = useMemo(() => {
-    return buildNodesWithLocations(mapNodes, storedLocations).nodes
-  }, [mapNodes, storedLocations])
+    return buildNodesWithLocations(mapNodes).nodes
+  }, [mapNodes])
 
   const selectedNode = nodesWithLocations.find((node) => node.deviceId === selectedNodeId) || null
   const totalNodeCount = nodesWithLocations.length

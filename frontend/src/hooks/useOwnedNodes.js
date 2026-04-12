@@ -3,41 +3,298 @@ import { onValue, ref } from "firebase/database"
 import { API_BASE_URL, MWBE_API_BASE_URL, getAuthHeaders } from "../lib/api"
 import { database } from "../lib/firebase-database"
 
+const TIMESTAMP_FIELD_NAMES = new Set([
+  "updatedatms",
+  "eventatms",
+  "timestampms",
+  "recordedatms",
+  "createdatms",
+  "updatedat",
+  "eventat",
+  "timestamp",
+  "recordedat",
+  "createdat",
+])
+
+const SENSOR_DEFINITIONS = [
+  {
+    key: "temperatureC",
+    aliases: ["temperaturec", "temperature", "temp"],
+  },
+  {
+    key: "humidityPct",
+    aliases: ["humiditypct", "humidity", "humid"],
+  },
+  {
+    key: "no2",
+    aliases: ["no2", "nitrogendioxide"],
+  },
+  {
+    key: "soundLevel",
+    aliases: ["soundlevel", "sound_level", "sound", "noiselevels", "noiselevel", "noise", "db", "decibel", "raw"],
+  },
+  {
+    key: "particulateMatterLevel",
+    aliases: ["particulatematterlevel", "particulate_matter_level", "particulatematter", "particulatematterlevel", "pm", "pm25", "aqi", "airquality"],
+  },
+]
+
 function mapOwnedDevice(device, previousNode) {
   return {
     id: device.deviceId,
     name: device.name,
     description: device.description,
     status: device.status,
+    latitude: device.latitude ?? previousNode?.latitude ?? null,
+    longitude: device.longitude ?? previousNode?.longitude ?? null,
+    locationLabel: device.locationLabel ?? previousNode?.locationLabel ?? null,
+    isLocationUnknown: typeof device.isLocationUnknown === "boolean"
+      ? device.isLocationUnknown
+      : (previousNode?.isLocationUnknown ?? true),
     telemetry: previousNode?.telemetry || null,
     updatedAtMs: previousNode?.updatedAtMs || null,
   }
 }
 
-function collectUpdatedAtValues(value, acc = []) {
+function parseNumericValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value
+  }
+
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value)
+
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+
+  return null
+}
+
+function parseTimestampMs(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value > 1_000_000_000_000) {
+      return value
+    }
+
+    if (value > 1_000_000_000) {
+      return value * 1_000
+    }
+  }
+
+  if (typeof value === "string" && value.trim() !== "") {
+    const numericValue = Number(value)
+
+    if (Number.isFinite(numericValue)) {
+      return parseTimestampMs(numericValue)
+    }
+
+    const parsedValue = Date.parse(value)
+
+    if (!Number.isNaN(parsedValue)) {
+      return parsedValue
+    }
+  }
+
+  return null
+}
+
+function normalizeLookupKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+}
+
+function collectUpdatedAtValues(value, acc = [], seen = new Set()) {
   if (!value || typeof value !== "object") {
     return acc
   }
 
-  if (typeof value.updatedAtMs === "number") {
-    acc.push(value.updatedAtMs)
+  if (seen.has(value)) {
+    return acc
   }
 
-  if (typeof value.eventAtMs === "number") {
-    acc.push(value.eventAtMs)
+  seen.add(value)
+
+  if (Array.isArray(value)) {
+    value.forEach((child) => {
+      if (child && typeof child === "object") {
+        collectUpdatedAtValues(child, acc, seen)
+      }
+    })
+
+    return acc
   }
 
-  Object.values(value).forEach((child) => {
+  Object.entries(value).forEach(([key, child]) => {
+    if (TIMESTAMP_FIELD_NAMES.has(normalizeLookupKey(key))) {
+      const parsedTimestamp = parseTimestampMs(child)
+
+      if (parsedTimestamp !== null) {
+        acc.push(parsedTimestamp)
+      }
+    }
+
     if (child && typeof child === "object") {
-      collectUpdatedAtValues(child, acc)
+      collectUpdatedAtValues(child, acc, seen)
     }
   })
 
   return acc
 }
 
+function pickFieldValue(sources, keys) {
+  for (const source of sources) {
+    if (!source || typeof source !== "object") {
+      continue
+    }
+
+    for (const key of keys) {
+      const value = source[key]
+
+      if (value !== undefined && value !== null && value !== "") {
+        return value
+      }
+    }
+  }
+
+  return null
+}
+
+function collectLeafValues(value, path = [], acc = [], seen = new Set()) {
+  if (!value || typeof value !== "object") {
+    return acc
+  }
+
+  if (seen.has(value)) {
+    return acc
+  }
+
+  seen.add(value)
+
+  if (Array.isArray(value)) {
+    value.forEach((child, index) => {
+      collectLeafValues(child, path.concat(String(index)), acc, seen)
+    })
+
+    return acc
+  }
+
+  Object.entries(value).forEach(([key, child]) => {
+    const nextPath = path.concat(key)
+    const numericValue = parseNumericValue(child)
+
+    if (numericValue !== null) {
+      acc.push({
+        key,
+        normalizedKey: normalizeLookupKey(key),
+        normalizedPath: nextPath.map(normalizeLookupKey),
+        value: numericValue,
+      })
+      return
+    }
+
+    collectLeafValues(child, nextPath, acc, seen)
+  })
+
+  return acc
+}
+
+function scoreCandidate(candidate, aliases, preferredParents = []) {
+  let score = 0
+
+  aliases.forEach((alias) => {
+    if (candidate.normalizedKey === alias) {
+      score = Math.max(score, 100)
+    }
+
+    if (candidate.normalizedPath.includes(alias)) {
+      score = Math.max(score, 80)
+    }
+
+    if (candidate.normalizedKey.includes(alias) || alias.includes(candidate.normalizedKey)) {
+      score = Math.max(score, 60)
+    }
+  })
+
+  preferredParents.forEach((parentAlias) => {
+    if (candidate.normalizedPath.includes(parentAlias)) {
+      score += 10
+    }
+  })
+
+  return score
+}
+
+function pickSensorValue(payload, aliases, preferredParents = []) {
+  const candidates = collectLeafValues(payload)
+  let bestScore = 0
+  let bestValue = null
+
+  candidates.forEach((candidate) => {
+    const score = scoreCandidate(candidate, aliases, preferredParents)
+
+    if (score > bestScore) {
+      bestScore = score
+      bestValue = candidate.value
+    }
+  })
+
+  return bestValue
+}
+
+function hasSensorReadings(telemetry) {
+  return [
+    telemetry?.temperatureC,
+    telemetry?.humidityPct,
+    telemetry?.no2,
+    telemetry?.soundLevel,
+    telemetry?.particulateMatterLevel,
+  ].some((value) => Number.isFinite(value))
+}
+
+function normalizeNodeTelemetry(telemetry, receivedAtMs = Date.now()) {
+  if (!telemetry || typeof telemetry !== "object") {
+    return null
+  }
+
+  const normalizedTelemetry = {
+    ...telemetry,
+    temperatureC: pickSensorValue(telemetry, SENSOR_DEFINITIONS[0].aliases, ["sht30", "latest"]),
+    humidityPct: pickSensorValue(telemetry, SENSOR_DEFINITIONS[1].aliases, ["sht30", "latest"]),
+    no2: pickSensorValue(telemetry, SENSOR_DEFINITIONS[2].aliases, ["no2", "latest"]),
+    soundLevel: pickSensorValue(telemetry, SENSOR_DEFINITIONS[3].aliases, ["sound", "latest"]),
+    particulateMatterLevel: pickSensorValue(telemetry, SENSOR_DEFINITIONS[4].aliases, ["pms5003", "latest"]),
+    status: pickFieldValue(
+      [
+        telemetry,
+        telemetry.latest,
+        telemetry.readings,
+        telemetry.readings?.latest,
+        telemetry.telemetry,
+        telemetry.telemetry?.readings,
+        telemetry.telemetry?.readings?.latest,
+        telemetry.gatewayReadings,
+        telemetry.gatewayReadings?.latest,
+      ],
+      ["status"]
+    ),
+  }
+
+  const derivedUpdatedAtMs = deriveUpdatedAtMs(telemetry)
+  normalizedTelemetry.updatedAtMs =
+    derivedUpdatedAtMs !== null
+      ? derivedUpdatedAtMs
+      : (hasSensorReadings(normalizedTelemetry) ? receivedAtMs : null)
+
+  return normalizedTelemetry
+}
+
 function deriveNodeStatus(telemetry, fallbackStatus) {
   return (
+    telemetry?.status ||
     telemetry?.latest?.status ||
     telemetry?.readings?.latest?.status ||
     telemetry?.readings?.status ||
@@ -177,7 +434,7 @@ function useOwnedNodes(user) {
       onValue(
         ref(database, `users/${owner.firebase_uid}/devices/${node.id}`),
         (snapshot) => {
-          const telemetry = snapshot.val()
+          const telemetry = normalizeNodeTelemetry(snapshot.val())
 
           setWarning("")
 
@@ -191,7 +448,7 @@ function useOwnedNodes(user) {
                 ...currentNode,
                 telemetry,
                 status: deriveNodeStatus(telemetry, currentNode.status),
-                updatedAtMs: deriveUpdatedAtMs(telemetry),
+                updatedAtMs: telemetry?.updatedAtMs ?? null,
               }
             })
           )

@@ -11,29 +11,48 @@ const registerSwagger = require("./swagger");
 const registerSupabase = require("./supabase");
 const registerFirebase = require("./firebase");
 const registerDeviceHistory = require("../services/deviceHistory");
+const DEFAULT_ALLOWED_WEB_ORIGINS = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+];
+
+function normalizeOrigin(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
 
 function buildCorsOrigin() {
   const configuredOrigin = process.env.CORS_ORIGIN;
+  const configuredOrigins = process.env.CORS_ORIGINS;
+  const rawSources = [
+    configuredOrigin,
+    configuredOrigins,
+    process.env.FRONTEND_URL,
+    process.env.FRONTEND_ORIGIN,
+    process.env.APP_URL,
+    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "",
+  ];
+  const allowAllOrigins = rawSources.some((value) =>
+    ["*", "true"].includes(String(value || "").trim().toLowerCase())
+  );
 
-  if (!configuredOrigin || configuredOrigin === "*") {
+  if (allowAllOrigins) {
     return true;
   }
 
-  if (configuredOrigin === "true") {
-    return true;
-  }
-
-  const allowedOrigins = configuredOrigin
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const allowedOrigins = [...new Set(
+    [...DEFAULT_ALLOWED_WEB_ORIGINS, ...rawSources.flatMap((source) => String(source || "").split(","))]
+      .map((origin) => normalizeOrigin(origin))
+      .filter(Boolean)
+  )];
 
   if (allowedOrigins.length === 0) {
     return true;
   }
 
   return (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin || allowedOrigins.includes(normalizeOrigin(origin))) {
       callback(null, true);
       return;
     }
