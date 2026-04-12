@@ -35,7 +35,8 @@ const DEFAULT_THRESHOLDS = {
 }
 const DEFAULT_FIREBASE_PROJECT_ID = "senior-project-esgators"
 const DEFAULT_FIREBASE_DATABASE_URL = `https://${DEFAULT_FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com`
-const DEFAULT_FIREBASE_DEVICE_ROOT_PATH = "devices"
+const DEFAULT_FIREBASE_DEVICE_ROOT_PATH = "users"
+const FIREBASE_USER_DEVICES_PATH_SEGMENT = "devices"
 const DEFAULT_FIREBASE_SYNC_INTERVAL_MS = 5000
 const DEFAULT_FIREBASE_OWNER_SYNC_INTERVAL_MS = 1000
 const DEFAULT_OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses"
@@ -765,6 +766,19 @@ function joinFirebasePath(...segments) {
         .map((segment) => String(segment || "").trim())
         .filter(Boolean)
         .join("/")
+}
+
+function buildFirebaseOwnerDevicesPath(deviceRootPath, ownerUid) {
+    return joinFirebasePath(deviceRootPath, ownerUid, FIREBASE_USER_DEVICES_PATH_SEGMENT)
+}
+
+function buildFirebaseDevicePath(deviceRootPath, ownerUid, deviceId) {
+    return joinFirebasePath(
+        deviceRootPath,
+        ownerUid,
+        FIREBASE_USER_DEVICES_PATH_SEGMENT,
+        deviceId
+    )
 }
 
 function normalizeFirebaseTimestamp(rawTimestamp, fallbackTimestamp = Date.now()) {
@@ -2249,6 +2263,21 @@ function createApp(options = {}) {
         return data || null
     }
 
+    async function resolveFirebaseOwnerUid(ownerUid) {
+        const normalizedOwnerUid = String(ownerUid || "").trim()
+
+        if (!normalizedOwnerUid) {
+            return ""
+        }
+
+        if (!isUuid(normalizedOwnerUid)) {
+            return normalizedOwnerUid
+        }
+
+        const owner = await loadOwnerRecord(normalizedOwnerUid)
+        return String(owner?.firebase_uid || normalizedOwnerUid).trim()
+    }
+
     async function loadOwnedFirebaseDeviceIds(ownerUid) {
         const normalizedOwnerUid = String(ownerUid || "").trim()
 
@@ -2312,6 +2341,153 @@ function createApp(options = {}) {
         )]
     }
 
+    function normalizeFirebaseRootEntries(rootPayload, config) {
+        if (!rootPayload || typeof rootPayload !== "object") {
+            return []
+        }
+
+        return Object.entries(rootPayload).flatMap(([ownerUid, ownerPayload]) => {
+            const normalizedOwnerUid = String(ownerUid || "").trim()
+            const devicesPayload = ownerPayload?.[FIREBASE_USER_DEVICES_PATH_SEGMENT]
+
+            if (!normalizedOwnerUid || !devicesPayload || typeof devicesPayload !== "object") {
+                return []
+            }
+
+            return Object.entries(devicesPayload)
+                .map(([deviceId, payload]) => {
+                    const normalizedDeviceId = String(deviceId || "").trim()
+
+                    if (!normalizedDeviceId) {
+                        return null
+                    }
+
+                    return {
+                        deviceId: normalizedDeviceId,
+                        ownerUid: normalizedOwnerUid,
+                        path: buildFirebaseDevicePath(
+                            config.deviceRootPath,
+                            normalizedOwnerUid,
+                            normalizedDeviceId
+                        ),
+                        payload,
+                    }
+                })
+                .filter(Boolean)
+        })
+    }
+
+    async function readFirebaseRootEntries(config) {
+        const rootPayload = await readFirebaseValue(config.deviceRootPath)
+        return normalizeFirebaseRootEntries(rootPayload, config)
+    }
+
+    async function loadFirebaseDeviceEntriesByIds(deviceIds, config, options = {}) {
+        const fallbackOwnerUid = String(options.ownerUid || "").trim()
+        const uniqueDeviceIds = [...new Set(
+            (deviceIds || [])
+                .map((deviceId) => String(deviceId || "").trim())
+                .filter(Boolean)
+        )]
+
+        if (uniqueDeviceIds.length === 0) {
+            return []
+        }
+
+        const ownerMetadataByDeviceId = await loadDeviceOwnerMetadataMap(uniqueDeviceIds)
+        const resolvedEntriesByDeviceId = new Map()
+        const unresolvedDeviceIds = []
+
+        const directPathLookups = await Promise.all(uniqueDeviceIds.map(async (deviceId) => {
+            const metadata = ownerMetadataByDeviceId.get(deviceId)
+            const ownerUidCandidate = String(
+                metadata?.owner_uid
+                || fallbackOwnerUid
+                || ""
+            ).trim()
+
+            if (!ownerUidCandidate || ownerUidCandidate === DEFAULT_DEVICE_OWNER_LABELS.owner_uid) {
+                return {
+                    deviceId,
+                    ownerUid: "",
+                    path: "",
+                    payload: null,
+                }
+            }
+
+            const resolvedOwnerUid = await resolveFirebaseOwnerUid(ownerUidCandidate)
+            const pathToRead = buildFirebaseDevicePath(
+                config.deviceRootPath,
+                resolvedOwnerUid,
+                deviceId
+            )
+
+            try {
+                return {
+                    deviceId,
+                    ownerUid: resolvedOwnerUid,
+                    path: pathToRead,
+                    payload: await readFirebaseValue(pathToRead),
+                }
+            } catch (error) {
+                return {
+                    deviceId,
+                    ownerUid: resolvedOwnerUid,
+                    path: pathToRead,
+                    payload: null,
+                    error,
+                }
+            }
+        }))
+
+        directPathLookups.forEach((entry) => {
+            if (entry?.payload) {
+                resolvedEntriesByDeviceId.set(entry.deviceId, entry)
+                return
+            }
+
+            unresolvedDeviceIds.push(entry.deviceId)
+        })
+
+        if (unresolvedDeviceIds.length === 0 || options.allowRootScan === false) {
+            return uniqueDeviceIds
+                .map((deviceId) => resolvedEntriesByDeviceId.get(deviceId))
+                .filter(Boolean)
+        }
+
+        let rootEntries = []
+
+        try {
+            rootEntries = await readFirebaseRootEntries(config)
+        } catch (error) {
+            if (
+                resolvedEntriesByDeviceId.size > 0
+                && isFirebasePermissionError(error)
+            ) {
+                return uniqueDeviceIds
+                    .map((deviceId) => resolvedEntriesByDeviceId.get(deviceId))
+                    .filter(Boolean)
+            }
+
+            throw error
+        }
+        const rootEntriesByDeviceId = new Map(
+            rootEntries.map((entry) => [entry.deviceId, entry])
+        )
+
+        unresolvedDeviceIds.forEach((deviceId) => {
+            const rootEntry = rootEntriesByDeviceId.get(deviceId)
+
+            if (rootEntry) {
+                resolvedEntriesByDeviceId.set(deviceId, rootEntry)
+            }
+        })
+
+        return uniqueDeviceIds
+            .map((deviceId) => resolvedEntriesByDeviceId.get(deviceId))
+            .filter(Boolean)
+    }
+
     function filterChangedFirebaseSamples(samples, source) {
         const changedSamples = []
         let skippedUnchanged = 0
@@ -2345,17 +2521,10 @@ function createApp(options = {}) {
                 .map((deviceId) => String(deviceId || "").trim())
                 .filter(Boolean)
         )]
-
-        const devicePayloads = await Promise.all(
-            uniqueDeviceIds.map(async (deviceId) => ({
-                deviceId,
-                path: joinFirebasePath(config.deviceRootPath, deviceId),
-                payload: await readFirebaseValue(joinFirebasePath(config.deviceRootPath, deviceId)),
-            }))
-        )
-
+        const devicePayloads = await loadFirebaseDeviceEntriesByIds(deviceIds, config, options)
         const normalizedDevices = devicePayloads.map((devicePayload) => ({
             deviceId: devicePayload.deviceId,
+            ownerUid: devicePayload.ownerUid,
             path: devicePayload.path,
             samples: devicePayload.payload
                 ? normalizeFirebaseDevicePayload(devicePayload.deviceId, devicePayload.payload, now)
@@ -2428,23 +2597,24 @@ function createApp(options = {}) {
         const requestedDeviceId = String(options.deviceId || "").trim()
 
         if (requestedOwnerUid) {
+            const resolvedOwnerUid = await resolveFirebaseOwnerUid(requestedOwnerUid)
             const ownedDeviceIds = await loadOwnedFirebaseDeviceIds(requestedOwnerUid)
             return syncFirebaseDevicesByIds(ownedDeviceIds, config, {
-                ownerUid: requestedOwnerUid,
-                path: joinFirebasePath(config.deviceRootPath, `{owner:${requestedOwnerUid}}`),
+                ownerUid: resolvedOwnerUid,
+                path: buildFirebaseOwnerDevicesPath(config.deviceRootPath, resolvedOwnerUid || requestedOwnerUid),
             })
         }
 
         if (requestedDeviceId) {
             return syncFirebaseDevicesByIds([requestedDeviceId], config, {
-                path: joinFirebasePath(config.deviceRootPath, requestedDeviceId),
+                path: buildFirebaseDevicePath(config.deviceRootPath, "{owner}", requestedDeviceId),
             })
         }
 
         const knownDeviceIds = await loadKnownFirebaseDeviceIds()
         if (knownDeviceIds.length > 0) {
             return syncFirebaseDevicesByIds(knownDeviceIds, config, {
-                path: joinFirebasePath(config.deviceRootPath, "{known_devices}"),
+                path: joinFirebasePath(config.deviceRootPath, "{known_owners}", FIREBASE_USER_DEVICES_PATH_SEGMENT),
             })
         }
 
@@ -2458,7 +2628,7 @@ function createApp(options = {}) {
                 throw error
             }
 
-            state.lastFirebaseError = "Firebase devices root is denied and no known device list is configured"
+            state.lastFirebaseError = "Firebase users root is denied and no known device list is configured"
             state.lastFirebaseSamples = []
             state.lastFirebaseSync = {
                 deviceCount: 0,
@@ -2488,9 +2658,11 @@ function createApp(options = {}) {
             throw new Error(`No Firebase data found at ${pathToRead}`)
         }
 
-        const normalizedDevices = Object.entries(devices).map(([entryDeviceId, payload]) => ({
-            deviceId: entryDeviceId,
-            samples: normalizeFirebaseDevicePayload(entryDeviceId, payload, now),
+        const normalizedDevices = normalizeFirebaseRootEntries(devices, config).map((entry) => ({
+            deviceId: entry.deviceId,
+            ownerUid: entry.ownerUid,
+            path: entry.path,
+            samples: normalizeFirebaseDevicePayload(entry.deviceId, entry.payload, now),
         }))
 
         const samples = normalizedDevices.flatMap((device) => device.samples)
@@ -2537,6 +2709,7 @@ function createApp(options = {}) {
             ...state.lastFirebaseSync,
             devices: normalizedDevices.map((device) => ({
                 deviceId: device.deviceId,
+                path: device.path,
                 sampleCount: device.samples.length,
             })),
             samples: result.accepted,
@@ -2652,10 +2825,18 @@ function createApp(options = {}) {
 
         const explicitPath = String(req.query.path || "").trim()
         const requestedDeviceId = String(req.query.deviceId || "").trim()
+        const deviceEntries = explicitPath || !requestedDeviceId
+            ? []
+            : await loadFirebaseDeviceEntriesByIds([requestedDeviceId], config)
         const pathToRead = explicitPath
-            || (requestedDeviceId ? joinFirebasePath(config.deviceRootPath, requestedDeviceId) : config.deviceRootPath)
+            || deviceEntries[0]?.path
+            || (requestedDeviceId
+                ? buildFirebaseDevicePath(config.deviceRootPath, "{owner}", requestedDeviceId)
+                : config.deviceRootPath)
 
-        const payload = await readFirebaseValue(pathToRead)
+        const payload = explicitPath || !requestedDeviceId
+            ? await readFirebaseValue(pathToRead)
+            : deviceEntries[0]?.payload || null
         res.json(payload)
     })
 
@@ -2758,8 +2939,11 @@ function createApp(options = {}) {
 
         try {
             const deviceId = String(req.params.deviceId || "").trim()
-            const pathToRead = joinFirebasePath(config.deviceRootPath, deviceId)
-            const payload = await readFirebaseValue(pathToRead)
+            const deviceEntries = await loadFirebaseDeviceEntriesByIds([deviceId], config)
+            const deviceEntry = deviceEntries[0] || null
+            const pathToRead = deviceEntry?.path
+                || buildFirebaseDevicePath(config.deviceRootPath, "{owner}", deviceId)
+            const payload = deviceEntry?.payload || null
 
             if (!payload) {
                 res.status(404).json({ error: `No Firebase data found at ${pathToRead}` })

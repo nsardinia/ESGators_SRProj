@@ -75,7 +75,8 @@ If no Firebase env vars are set, the backend falls back to:
 
 Firebase sync notes:
 - backend background polling is disabled by default; the temporary flow is user-session polling from the frontend against registered device IDs
-- if `devices.json` is denied, the backend falls back to per-device reads via `FIREBASE_SYNC_DEVICE_IDS` or the Supabase `devices` table
+- the current RTDB layout is `users/{firebase_uid}/devices/{device_id}/{no2|sht30|sound|...}`
+- if `users.json` is denied, the backend falls back to per-device reads via `FIREBASE_SYNC_DEVICE_IDS` or the Supabase `devices` table
 - if neither of those is available, background polling is skipped instead of repeatedly failing with 401
 - unchanged Firebase values are skipped so Prometheus is only updated when a metric changes
 
@@ -108,7 +109,7 @@ MWBE_SYNC_ON_START=false
 
 FIREBASE_DATABASE_URL=https://senior-project-esgators-default-rtdb.firebaseio.com
 VITE_FIREBASE_PROJECT_ID=senior-project-esgators
-FIREBASE_DEVICE_ROOT_PATH=devices
+FIREBASE_DEVICE_ROOT_PATH=users
 FIREBASE_SOURCE_NAME=firebase-rtdb
 
 KALSHI_ENVIRONMENT=demo
@@ -315,6 +316,8 @@ Current Firebase device mapping:
 - `pms5003.latest.aqi` or `pms5003.latest.airQuality` -> `air_quality`
 
 If a Firebase `updatedAtMs` value is not an absolute Unix timestamp, the backend falls back to the current server time before sending the sample to Prometheus.
+
+For direct per-device reads, the backend resolves Firebase payloads from `users/{ownerUid}/devices/{deviceId}`.
 
 If `backend/firebase-key.json` or `FIREBASE_SERVICE_ACCOUNT_JSON` is not available yet, the backend falls back to read-only Firebase REST GET using `FIREBASE_DATABASE_URL` or `VITE_FIREBASE_PROJECT_ID`.
 That fallback only works when RTDB security rules allow read access for the requested path.

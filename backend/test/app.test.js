@@ -499,33 +499,40 @@ test("normalizeFirebaseDevicePayload maps device export shape into ingestible sa
 
 test("firebase sync endpoint ingests mapped RTDB device data", async () => {
     const deviceId = "dev_472584440bca1b56b0518a6620641d39"
+    const ownerUid = "firebase-user-telemetry"
     const firebaseDb = createMockFirebaseDb({
-        [`devices/${deviceId}`]: {
-            no2: {
-                latest: {
-                    deviceId,
-                    firebaseUid: `device:${deviceId}`,
-                    raw: 3709,
-                    unit: "adc_raw",
-                    updatedAtMs: 2685761,
-                },
-            },
-            sht30: {
-                latest: {
-                    deviceId,
-                    firebaseUid: `device:${deviceId}`,
-                    humidityPct: 49.45144,
-                    temperatureC: 28.87732,
-                    updatedAtMs: 2690353,
-                },
-            },
-            sound: {
-                latest: {
-                    deviceId,
-                    firebaseUid: `device:${deviceId}`,
-                    raw: 0,
-                    unit: "adc_raw",
-                    updatedAtMs: 2688330,
+        users: {
+            [ownerUid]: {
+                devices: {
+                    [deviceId]: {
+                        no2: {
+                            latest: {
+                                deviceId,
+                                firebaseUid: `device:${deviceId}`,
+                                raw: 3709,
+                                unit: "adc_raw",
+                                updatedAtMs: 2685761,
+                            },
+                        },
+                        sht30: {
+                            latest: {
+                                deviceId,
+                                firebaseUid: `device:${deviceId}`,
+                                humidityPct: 49.45144,
+                                temperatureC: 28.87732,
+                                updatedAtMs: 2690353,
+                            },
+                        },
+                        sound: {
+                            latest: {
+                                deviceId,
+                                firebaseUid: `device:${deviceId}`,
+                                raw: 0,
+                                unit: "adc_raw",
+                                updatedAtMs: 2688330,
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -564,7 +571,7 @@ test("firebase sync endpoint enriches metrics with Supabase owner labels", async
     const ownerUid = "firebase-user-123"
     const ownerEmail = "owner@example.com"
     const firebaseDb = createMockFirebaseDb({
-        [`devices/${deviceId}`]: {
+        [`users/${ownerUid}/devices/${deviceId}`]: {
             sht30: {
                 latest: {
                     deviceId,
@@ -620,7 +627,7 @@ test("firebase sync endpoint only ingests devices owned by the requested ownerUi
     const ownedDeviceId = "dev_owner_a_node"
     const otherDeviceId = "dev_owner_b_node"
     const firebaseDb = createMockFirebaseDb({
-        [`devices/${ownedDeviceId}`]: {
+        [`users/${ownerUid}/devices/${ownedDeviceId}`]: {
             sht30: {
                 latest: {
                     deviceId: ownedDeviceId,
@@ -630,7 +637,7 @@ test("firebase sync endpoint only ingests devices owned by the requested ownerUi
                 },
             },
         },
-        [`devices/${otherDeviceId}`]: {
+        [`users/firebase-user-b/devices/${otherDeviceId}`]: {
             sht30: {
                 latest: {
                     deviceId: otherDeviceId,
@@ -695,14 +702,21 @@ test("firebase sync endpoint only ingests devices owned by the requested ownerUi
 
 test("firebase sync skips unchanged samples on subsequent polls", async () => {
     const deviceId = "dev_repeat_same_value"
+    const ownerUid = "firebase-user-repeat"
     const firebaseDb = createMockFirebaseDb({
-        [`devices/${deviceId}`]: {
-            sht30: {
-                latest: {
-                    deviceId,
-                    temperatureC: 24.25,
-                    humidityPct: 51.75,
-                    updatedAtMs: 1234,
+        users: {
+            [ownerUid]: {
+                devices: {
+                    [deviceId]: {
+                        sht30: {
+                            latest: {
+                                deviceId,
+                                temperatureC: 24.25,
+                                humidityPct: 51.75,
+                                updatedAtMs: 1234,
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -732,12 +746,12 @@ test("firebase sync skips unchanged samples on subsequent polls", async () => {
     }
 })
 
-test("firebase sync falls back to known device ids when root devices path is denied", async () => {
+test("firebase sync falls back to known device ids when user root is denied", async () => {
     const firstDeviceId = "dev_known_a"
     const secondDeviceId = "dev_known_b"
     const firebaseDb = createMockFirebaseDbWithFailures(
         {
-            [`devices/${firstDeviceId}`]: {
+            [`users/owner-a/devices/${firstDeviceId}`]: {
                 sht30: {
                     latest: {
                         deviceId: firstDeviceId,
@@ -747,7 +761,7 @@ test("firebase sync falls back to known device ids when root devices path is den
                     },
                 },
             },
-            [`devices/${secondDeviceId}`]: {
+            [`users/owner-b/devices/${secondDeviceId}`]: {
                 no2: {
                     latest: {
                         deviceId: secondDeviceId,
@@ -765,7 +779,7 @@ test("firebase sync falls back to known device ids when root devices path is den
             },
         },
         {
-            devices: Object.assign(new Error("Request failed with status code 401"), {
+            users: Object.assign(new Error("Request failed with status code 401"), {
                 response: {
                     status: 401,
                     data: { error: "Permission denied" },
@@ -794,7 +808,7 @@ test("firebase sync falls back to known device ids when root devices path is den
 
         assert.equal(body.deviceCount, 2)
         assert.equal(body.accepted, 4)
-        assert.equal(body.path, "devices/{known_devices}")
+        assert.equal(body.path, "users/{known_owners}/devices")
         assert.deepEqual(
             body.devices.map((device) => device.deviceId).sort(),
             [firstDeviceId, secondDeviceId]
@@ -804,11 +818,11 @@ test("firebase sync falls back to known device ids when root devices path is den
     }
 })
 
-test("firebase sync skips instead of failing when root devices path is denied and no known devices exist", async () => {
+test("firebase sync skips instead of failing when user root is denied and no known devices exist", async () => {
     const firebaseDb = createMockFirebaseDbWithFailures(
         {},
         {
-            devices: Object.assign(new Error("Request failed with status code 401"), {
+            users: Object.assign(new Error("Request failed with status code 401"), {
                 response: {
                     status: 401,
                     data: { error: "Permission denied" },
