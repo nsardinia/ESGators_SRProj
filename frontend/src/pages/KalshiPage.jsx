@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react"
+import { useAuth } from "../components/AuthContext"
+import useOwnedNodes from "../hooks/useOwnedNodes"
 import { BACKEND_API_BASE_URL } from "../lib/api"
+import { buildNearestCompanyMarketHints } from "../lib/companyLocations"
+import { buildNodesWithLocations, readActiveOwnedNodeId } from "../lib/nodeLocations"
 
 const defaultFilters = {
   category: "Companies",
@@ -71,6 +75,16 @@ function formatDate(value) {
   }
 
   return parsed.toLocaleString()
+}
+
+function formatCoordinateValue(value) {
+  const numericValue = Number(value)
+
+  if (!Number.isFinite(numericValue)) {
+    return "-"
+  }
+
+  return numericValue.toFixed(4)
 }
 
 function formatValue(value, fallback = "-") {
@@ -283,6 +297,8 @@ async function fetchJson(url, options = {}) {
 }
 
 function KalshiPage() {
+  const { user } = useAuth()
+  const { createdNodes } = useOwnedNodes(user)
   const [filters, setFilters] = useState(defaultFilters)
   const [statusPayload, setStatusPayload] = useState(null)
   const [markets, setMarkets] = useState([])
@@ -312,6 +328,7 @@ function KalshiPage() {
   const [loadingTradePlan, setLoadingTradePlan] = useState(false)
   const [tradeSubmitting, setTradeSubmitting] = useState(false)
   const [seedingScenarioKey, setSeedingScenarioKey] = useState("")
+  const [referenceNodeId, setReferenceNodeId] = useState(() => readActiveOwnedNodeId())
 
   async function loadStatus() {
     setLoadingStatus(true)
@@ -575,6 +592,80 @@ function KalshiPage() {
 
     return entries.sort((left, right) => Number(right[1]) - Number(left[1]))
   }, [esgStatus])
+
+  const ownedNodesWithLocations = useMemo(() => {
+    const nodeInputs = createdNodes.map((node) => ({
+      ...node,
+      deviceId: node.id,
+      owner: {
+        email: user?.email || "",
+      },
+      ownerEmail: user?.email || "",
+    }))
+
+    return buildNodesWithLocations(nodeInputs).nodes
+  }, [createdNodes, user?.email])
+
+  useEffect(() => {
+    if (ownedNodesWithLocations.length === 0) {
+      if (referenceNodeId) {
+        setReferenceNodeId("")
+      }
+      return
+    }
+
+    const currentReferenceNode = ownedNodesWithLocations.find((node) => node.deviceId === referenceNodeId)
+
+    if (currentReferenceNode) {
+      return
+    }
+
+    const storedReferenceNodeId = readActiveOwnedNodeId()
+    const storedReferenceNode = ownedNodesWithLocations.find((node) => node.deviceId === storedReferenceNodeId)
+
+    setReferenceNodeId(storedReferenceNode?.deviceId || ownedNodesWithLocations[0]?.deviceId || "")
+  }, [ownedNodesWithLocations, referenceNodeId])
+
+  const referenceNode = useMemo(() => {
+    return ownedNodesWithLocations.find((node) => node.deviceId === referenceNodeId)
+      || ownedNodesWithLocations[0]
+      || null
+  }, [ownedNodesWithLocations, referenceNodeId])
+
+  const nearbyCompanyHintsByTicker = useMemo(() => {
+    if (filters.category !== "Companies") {
+      return {}
+    }
+
+    return buildNearestCompanyMarketHints(markets, referenceNode ? [referenceNode] : [])
+  }, [filters.category, markets, referenceNode])
+
+  const displayedMarkets = useMemo(() => {
+    if (filters.category !== "Companies") {
+      return markets
+    }
+
+    return [...markets].sort((left, right) => {
+      const leftHint = nearbyCompanyHintsByTicker[left?.ticker]
+      const rightHint = nearbyCompanyHintsByTicker[right?.ticker]
+
+      if (leftHint && rightHint) {
+        return leftHint.distanceKm - rightHint.distanceKm
+      }
+
+      if (leftHint) {
+        return -1
+      }
+
+      if (rightHint) {
+        return 1
+      }
+
+      return String(left?.title || left?.ticker || "").localeCompare(String(right?.title || right?.ticker || ""))
+    })
+  }, [filters.category, markets, nearbyCompanyHintsByTicker])
+
+  const nearbyCompanyCount = Object.keys(nearbyCompanyHintsByTicker).length
 
   const selectedMarketTitle = marketDetail?.title || marketDetail?.subtitle || marketDetail?.question || selectedTicker
   const kalshiConfig = statusPayload?.config
@@ -920,6 +1011,38 @@ function KalshiPage() {
             <p className="text-[0.94rem] text-[var(--muted)]">
               {markets.length} markets loaded{marketsCursor ? `, cursor ${marketsCursor}` : ""}.
             </p>
+            {filters.category === "Companies" ? (
+              <p className="mt-1 text-[0.88rem] text-[var(--muted)]">
+                Kalshi company markets do not include coordinates, so nearby matching uses the selected Global Node Map device and our demo HQ registry.
+                {nearbyCompanyCount > 0 ? ` ${nearbyCompanyCount} loaded markets matched a known company.` : ""}
+              </p>
+            ) : null}
+            {filters.category === "Companies" && ownedNodesWithLocations.length > 0 ? (
+              <div className="mt-3 flex flex-wrap items-end gap-3">
+                <div className="min-w-[220px]">
+                  <label className="mb-2 block text-[0.8rem] uppercase tracking-[0.05em] text-[var(--muted)]" htmlFor="kalshi-reference-node">
+                    Reference device
+                  </label>
+                  <select
+                    id="kalshi-reference-node"
+                    className={fieldClassName}
+                    value={referenceNode?.deviceId || ""}
+                    onChange={(event) => setReferenceNodeId(event.target.value)}
+                  >
+                    {ownedNodesWithLocations.map((node) => (
+                      <option key={node.deviceId} value={node.deviceId}>
+                        {node.name || node.deviceId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {referenceNode ? (
+                  <p className="pb-2 text-[0.88rem] text-[var(--muted)]">
+                    Using Global Node Map coordinates from {referenceNode.name || referenceNode.deviceId}: {formatCoordinateValue(referenceNode.latitude)}, {formatCoordinateValue(referenceNode.longitude)}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           {marketsError ? <p className="mb-3 text-[0.92rem] text-[#f9b4b4]">{marketsError}</p> : null}
@@ -936,8 +1059,9 @@ function KalshiPage() {
               ) : markets.length === 0 ? (
                 <p className="px-4 py-5 text-[0.95rem] text-[var(--muted)]">No markets matched that filter.</p>
               ) : (
-                markets.map((market) => {
+                displayedMarkets.map((market) => {
                   const isActive = market?.ticker === selectedTicker
+                  const nearbyHint = nearbyCompanyHintsByTicker[market?.ticker]
 
                   return (
                     <button
@@ -955,6 +1079,11 @@ function KalshiPage() {
                           {market?.title || market?.subtitle || market?.question || market?.ticker}
                         </p>
                         <p className="mt-1 truncate text-[0.85rem] text-[var(--muted)]">{market?.ticker}</p>
+                        {nearbyHint ? (
+                          <p className="mt-1 truncate text-[0.82rem] text-[#8ed5bb]">
+                            Closest known HQ: {nearbyHint.companyLabel} in {nearbyHint.companyLocationLabel} / {nearbyHint.distanceLabel} from {nearbyHint.nodeName}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="text-[0.92rem] text-[var(--muted)]">{formatValue(market?.status)}</div>
                       <div className="text-[0.92rem] text-[var(--muted)]">{formatDate(market?.close_time || market?.expiration_time)}</div>

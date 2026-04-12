@@ -2,6 +2,30 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import KalshiPage from "./KalshiPage"
 
+vi.mock("../components/AuthContext", () => ({
+  useAuth: () => ({
+    user: {
+      uid: "user-1",
+      email: "owner@example.com",
+      displayName: "Owner",
+    },
+  }),
+}))
+
+vi.mock("../hooks/useOwnedNodes", () => ({
+  default: () => ({
+    createdNodes: [
+      {
+        id: "node-1",
+        name: "North Node",
+      },
+    ],
+    error: "",
+    loadingNodes: false,
+    warning: "",
+  }),
+}))
+
 describe("KalshiPage", () => {
   it("loads the ESG trade plan, market data, and recent orders", async () => {
     const originalFetch = global.fetch
@@ -360,6 +384,160 @@ describe("KalshiPage", () => {
       })
 
       expect(fetchCalls.some((call) => call.url.includes("/kalshi/markets?category=Companies&status=open&limit=12"))).toBe(true)
+    } finally {
+      global.fetch = originalFetch
+    }
+  })
+
+  it("annotates known company markets with the closest node-to-HQ hint", async () => {
+    const originalFetch = global.fetch
+
+    global.fetch = vi.fn(async (url, options = {}) => {
+      const normalizedUrl = String(url)
+      const method = String(options?.method || "GET").toUpperCase()
+
+      if (normalizedUrl.endsWith("/kalshi/status")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            config: {
+              environment: "demo",
+              baseUrl: "https://demo-api.kalshi.co/trade-api/v2",
+              authConfigured: true,
+              hasApiKeyId: true,
+              hasPrivateKey: true,
+            },
+          }),
+        }
+      }
+
+      if (normalizedUrl.endsWith("/esg/status")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            latest: {
+              overall: 88.4,
+              metricScores: {
+                air_quality: 91,
+              },
+            },
+            bufferedSamples: 5,
+          }),
+        }
+      }
+
+      if (normalizedUrl.includes("/kalshi/markets?")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            markets: [
+              {
+                ticker: "APPLEFOLD-1",
+                title: "Apple reveals foldable iPhone",
+                status: "open",
+                close_time: "2026-04-11T12:00:00.000Z",
+              },
+            ],
+            cursor: "",
+          }),
+        }
+      }
+
+      if (normalizedUrl.endsWith("/kalshi/markets/APPLEFOLD-1")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            ticker: "APPLEFOLD-1",
+            title: "Apple reveals foldable iPhone",
+            status: "open",
+            yes_bid: 47,
+            yes_ask: 49,
+            last_price: 48,
+            close_time: "2026-04-11T12:00:00.000Z",
+          }),
+        }
+      }
+
+      if (normalizedUrl.includes("/kalshi/markets/APPLEFOLD-1/orderbook")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            orderbook_fp: {
+              yes_dollars: [["0.4900", "25.00"]],
+              no_dollars: [["0.5100", "18.00"]],
+            },
+          }),
+        }
+      }
+
+      if (normalizedUrl.endsWith("/kalshi/portfolio/balance")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            balance: 12500,
+          }),
+        }
+      }
+
+      if (normalizedUrl.includes("/kalshi/portfolio/orders?limit=25")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            orders: [],
+          }),
+        }
+      }
+
+      if (normalizedUrl.includes("/kalshi/esg/trade-plan?ticker=APPLEFOLD-1")) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            signal: {
+              side: "yes",
+              action: "buy",
+              count: 3,
+              confidence: "high",
+              limitPriceCents: 49,
+              rationale: "Overall ESG score 88.40 supports a YES bias.",
+            },
+            market: {
+              ticker: "APPLEFOLD-1",
+              title: "Apple reveals foldable iPhone",
+            },
+            orderPreview: {
+              client_order_id: "preview-1",
+            },
+          }),
+        }
+      }
+
+      if (normalizedUrl.endsWith("/iot/data/batch") && method === "POST") {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({
+            status: "success",
+          }),
+        }
+      }
+
+      throw new Error(`Unhandled fetch URL: ${normalizedUrl}`)
+    })
+
+    try {
+      render(<KalshiPage />)
+
+      expect(await screen.findByText(/closest known hq: apple in cupertino, california/i)).toBeInTheDocument()
+      expect(await screen.findByText(/kalshi company markets do not include coordinates/i)).toBeInTheDocument()
+      expect(await screen.findByText(/using global node map coordinates from north node/i)).toBeInTheDocument()
     } finally {
       global.fetch = originalFetch
     }
