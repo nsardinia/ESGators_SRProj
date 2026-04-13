@@ -202,9 +202,9 @@ test("batch ingestion calculates ESG score and reports remote write status", asy
         assert.equal(body.accepted, 3)
         assert.equal(body.rejected, 0)
         assert.equal(body.esg.sampleCount, 3)
-        assert.equal(body.esg.metricScores.temperature, 0)
+        assert.equal(body.esg.metricScores.temperature, 42.5)
         assert.equal(body.esg.metricScores.humidity, 100)
-        assert.equal(body.esg.overall, 50)
+        assert.equal(body.esg.overall, 46.25)
 
         if (hasRemoteWriteConfig()) {
             assert.equal(body.pushResult.skipped, false)

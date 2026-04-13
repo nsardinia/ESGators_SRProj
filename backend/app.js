@@ -107,6 +107,8 @@ const ESG_COMPONENT_WEIGHTS = {
 }
 const ESG_COMPONENT_ORDER = ["no2", "noise_levels", "temperature", "humidity"]
 const ESG_SCORE_LOOKBACK_MS = 10 * 60 * 1000
+const ESG_NOISE_BASELINE = 50
+const ESG_NOISE_RANGE = 20
 
 let writeRequestTypePromise
 
@@ -598,6 +600,10 @@ function clampMax(value, max) {
     return Math.min(Number(value), max)
 }
 
+function clampMin(value, min) {
+    return Math.max(Number(value), min)
+}
+
 function average(values) {
     if (!Array.isArray(values) || values.length === 0) {
         return null
@@ -657,7 +663,7 @@ function getMetricComponentScore(metricType, samples = []) {
             penalty = clampMax((((latestValue - Math.min(...numericValues)) * 3.3 / 4095) / 0.1), 1)
             break
         case "noise_levels":
-            penalty = clampMax((latestValue - average(numericValues)) / 20, 1)
+            penalty = clampMax(clampMin((latestValue - ESG_NOISE_BASELINE) / ESG_NOISE_RANGE, 0), 1)
             break
         case "temperature":
             penalty = clampMax(Math.abs(latestValue - 22.5) / 10, 1)
@@ -711,6 +717,46 @@ function calculateWeightedEsgScore(metricScores = {}) {
     }
 
     return Number((weightedTotal / totalWeight).toFixed(2))
+}
+
+function calculateEsgStateFromSamples(samples = [], now = Date.now()) {
+    const scoringSamples = samples.filter(
+        (sample) => normalizeScoreTimestamp(sample?.timestamp) >= now - ESG_SCORE_LOOKBACK_MS
+    )
+    const sensorBuckets = groupSamplesBy(scoringSamples, (sample) => sample?.sensor_id)
+    const sensorScores = {}
+    const sensorMetricScores = new Map()
+    const metricScoreBuckets = {}
+
+    sensorBuckets.forEach((sensorSamples, sensorId) => {
+        const metricScores = calculateMetricScoresFromSamples(sensorSamples, now)
+        const sensorOverall = calculateWeightedEsgScore(metricScores)
+
+        sensorMetricScores.set(sensorId, metricScores)
+
+        Object.entries(metricScores).forEach(([metricType, score]) => {
+            metricScoreBuckets[metricType] = metricScoreBuckets[metricType] || []
+            metricScoreBuckets[metricType].push(score)
+        })
+
+        if (Number.isFinite(sensorOverall)) {
+            sensorScores[sensorId] = sensorOverall
+        }
+    })
+
+    const metricScores = Object.fromEntries(
+        Object.entries(metricScoreBuckets)
+            .map(([metricType, scores]) => [metricType, Number(average(scores).toFixed(2))])
+    )
+    const overallAverage = average(Object.values(sensorScores))
+
+    return {
+        scoringSamples,
+        sensorMetricScores,
+        sensorScores,
+        metricScores,
+        overall: Number.isFinite(overallAverage) ? Number(overallAverage.toFixed(2)) : null,
+    }
 }
 
 function getByPath(payload, dotPath) {
@@ -1653,11 +1699,12 @@ function createApp(options = {}) {
             return
         }
 
-        const metricScores = calculateMetricScoresFromSamples(scoringSamples, computedAt)
-        const overall = calculateWeightedEsgScore(metricScores)
-        const sensorScores = {}
+        const {
+            metricScores,
+            overall,
+            sensorScores,
+        } = calculateEsgStateFromSamples(bufferedSamples, computedAt)
         const sensorLabels = {}
-        const sensorBuckets = groupSamplesBy(scoringSamples, (sample) => sample.sensor_id)
 
         scoringSamples.forEach((sample) => {
             sensorLabels[sample.sensor_id] = normalizeDeviceOwnerLabels(sample)
@@ -1667,16 +1714,7 @@ function createApp(options = {}) {
             esgMetricScoreMetric.set({ metric_type: metricType }, score)
         })
 
-        sensorBuckets.forEach((sensorSamples, sensorId) => {
-            const sensorScore = calculateWeightedEsgScore(
-                calculateMetricScoresFromSamples(sensorSamples, computedAt)
-            )
-
-            if (!Number.isFinite(sensorScore)) {
-                return
-            }
-
-            sensorScores[sensorId] = sensorScore
+        Object.entries(sensorScores).forEach(([sensorId, sensorScore]) => {
             esgSensorScoreMetric.set(
                 {
                     sensor_id: sensorId,
