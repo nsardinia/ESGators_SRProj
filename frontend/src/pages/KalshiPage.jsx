@@ -115,21 +115,6 @@ function formatMetricLabel(metricType) {
     .join(" ")
 }
 
-function getMetricScoreHint(metricType) {
-  switch (String(metricType || "").toLowerCase()) {
-    case "no2":
-      return "Latest reading vs 10-minute low"
-    case "noise_levels":
-      return "Latest reading vs 10-minute average"
-    case "temperature":
-      return "Distance from 22.5 C target"
-    case "humidity":
-      return "Distance from 50% RH target"
-    default:
-      return ""
-  }
-}
-
 function formatCurrencyFromCents(value) {
   const numericValue = Number(value)
 
@@ -915,21 +900,12 @@ function KalshiPage() {
 
               <div className="space-y-2">
                 <p className="text-[0.82rem] uppercase tracking-[0.05em] text-[var(--muted)]">Score components</p>
-                <p className="text-[0.9rem] leading-6 text-[var(--muted)]">
-                  NO2 compares the latest reading against the last 10-minute low, noise compares against the 10-minute average,
-                  temperature targets 22.5 C, and humidity targets 50% RH.
-                </p>
                 {metricScores.length === 0 ? (
                   <p className="text-[0.92rem] text-[var(--muted)]">No metric scores available yet.</p>
                 ) : (
                   metricScores.map(([metricType, score]) => (
                     <div key={metricType} className="flex items-center justify-between gap-3 rounded-[8px] border border-[var(--border)] bg-[#121927] px-4 py-3">
-                      <div>
-                        <p className="text-[0.94rem] text-[var(--text)]">{formatMetricLabel(metricType)}</p>
-                        {getMetricScoreHint(metricType) ? (
-                          <p className="mt-1 text-[0.82rem] text-[var(--muted)]">{getMetricScoreHint(metricType)}</p>
-                        ) : null}
-                      </div>
+                      <span className="text-[0.94rem] text-[var(--text)]">{formatMetricLabel(metricType)}</span>
                       <span className="text-[0.94rem] font-semibold text-[var(--text)]">{formatValue(score)}</span>
                     </div>
                   ))
