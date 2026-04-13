@@ -202,9 +202,9 @@ test("batch ingestion calculates ESG score and reports remote write status", asy
         assert.equal(body.accepted, 3)
         assert.equal(body.rejected, 0)
         assert.equal(body.esg.sampleCount, 3)
-        assert.equal(body.esg.metricScores.temperature, 71.86)
+        assert.equal(body.esg.metricScores.temperature, 0)
         assert.equal(body.esg.metricScores.humidity, 100)
-        assert.equal(body.esg.overall, 85.93)
+        assert.equal(body.esg.overall, 50)
 
         if (hasRemoteWriteConfig()) {
             assert.equal(body.pushResult.skipped, false)
@@ -273,7 +273,7 @@ test("metrics endpoint exposes Prometheus-formatted sensor and ESG values", asyn
         const metricsText = await response.text()
         assert.match(metricsText, /sensor_data_metric\{sensor_id="sensor-prom",metric_type="temperature",source="test-suite",owner_uid="unknown",owner_email="unknown",device_name="sensor-prom"\} 31/)
         assert.match(metricsText, /sensor_data_anomaly_flag\{sensor_id="sensor-prom",metric_type="temperature",source="test-suite",owner_uid="unknown",owner_email="unknown",device_name="sensor-prom",severity="warning"\} 1/)
-        assert.match(metricsText, /esg_environment_score\{scope="overall"\} 71\.43/)
+        assert.match(metricsText, /esg_environment_score\{scope="overall"\} 15/)
         assert.match(metricsText, /esg_buffer_size 1/)
     } finally {
         await server.close()
@@ -317,9 +317,9 @@ test("esg status rebuilds from stored sensor_readings when memory is empty", asy
         assert.equal(response.status, 200)
 
         const body = await response.json()
-        assert.equal(body.latest.overall, 100)
+        assert.equal(body.latest.overall, 85.84)
         assert.equal(body.bufferedSamples, 3)
-        assert.equal(body.latest.metricScores.temperature, 100)
+        assert.equal(body.latest.metricScores.temperature, 85)
     } finally {
         await server.close()
     }
@@ -616,7 +616,7 @@ test("firebase sync endpoint enriches metrics with Supabase owner labels", async
         const metricsText = await metricsResponse.text()
 
         assert.match(metricsText, new RegExp(`sensor_data_metric\\{sensor_id="${deviceId}",metric_type="temperature",source="firebase-rtdb",owner_uid="${ownerUid}",owner_email="${ownerEmail}",device_name="Lab Greenhouse"\\} 24\\.25`))
-        assert.match(metricsText, new RegExp(`esg_sensor_score\\{sensor_id="${deviceId}",owner_uid="${ownerUid}",owner_email="${ownerEmail}",device_name="Lab Greenhouse"\\} 100`))
+        assert.match(metricsText, new RegExp(`esg_sensor_score\\{sensor_id="${deviceId}",owner_uid="${ownerUid}",owner_email="${ownerEmail}",device_name="Lab Greenhouse"\\} 82\\.09`))
     } finally {
         await server.close()
     }

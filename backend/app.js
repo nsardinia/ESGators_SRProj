@@ -99,6 +99,14 @@ const FIREBASE_SENSOR_MAPPINGS = [
     { bucket: "pms5003", field: "aqi", metric_type: "air_quality" },
     { bucket: "pms5003", field: "airQuality", metric_type: "air_quality" },
 ]
+const ESG_COMPONENT_WEIGHTS = {
+    no2: 0.4,
+    noise_levels: 0.2,
+    temperature: 0.2,
+    humidity: 0.2,
+}
+const ESG_COMPONENT_ORDER = ["no2", "noise_levels", "temperature", "humidity"]
+const ESG_SCORE_LOOKBACK_MS = 10 * 60 * 1000
 
 let writeRequestTypePromise
 
@@ -221,6 +229,23 @@ function normalizeKalshiBaseUrl(value) {
 function normalizeBaseUrl(value, fallback = "") {
     const normalized = String(value || "").trim().replace(/\/+$/, "")
     return normalized || fallback
+}
+
+function normalizeMetricType(value) {
+    return String(value ?? "").trim().toLowerCase()
+}
+
+function isSupportedMetricType(value) {
+    return METRIC_TYPES.includes(normalizeMetricType(value))
+}
+
+function parseFiniteNumber(value) {
+    const numericValue = Number(value)
+    return Number.isFinite(numericValue) ? numericValue : null
+}
+
+function getMetricTypeValidationMessage() {
+    return `metric_type must be one of: ${METRIC_TYPES.join(", ")}`
 }
 
 function getKalshiConfig() {
@@ -567,6 +592,125 @@ function buildEsgTradeSignal(esgScore) {
 
 function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max)
+}
+
+function clampMax(value, max) {
+    return Math.min(Number(value), max)
+}
+
+function average(values) {
+    if (!Array.isArray(values) || values.length === 0) {
+        return null
+    }
+
+    return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+function normalizeScoreTimestamp(value) {
+    return Number.isFinite(Number(value))
+        ? Math.trunc(Number(value))
+        : 0
+}
+
+function getLatestSample(samples = []) {
+    return samples.reduce((latest, sample) => {
+        if (!latest) {
+            return sample
+        }
+
+        return normalizeScoreTimestamp(sample?.timestamp) >= normalizeScoreTimestamp(latest?.timestamp)
+            ? sample
+            : latest
+    }, null)
+}
+
+function groupSamplesBy(samples = [], keySelector = () => "") {
+    return samples.reduce((groups, sample) => {
+        const key = String(keySelector(sample) || "").trim()
+
+        if (!key) {
+            return groups
+        }
+
+        const existing = groups.get(key) || []
+        existing.push(sample)
+        groups.set(key, existing)
+        return groups
+    }, new Map())
+}
+
+function getMetricComponentScore(metricType, samples = []) {
+    const latestSample = getLatestSample(samples)
+    const latestValue = Number(latestSample?.value)
+    const numericValues = samples
+        .map((sample) => Number(sample?.value))
+        .filter((value) => Number.isFinite(value))
+
+    if (!Number.isFinite(latestValue) || numericValues.length === 0) {
+        return null
+    }
+
+    let penalty
+
+    switch (metricType) {
+        case "no2":
+            penalty = clampMax((((latestValue - Math.min(...numericValues)) * 3.3 / 4095) / 0.1), 1)
+            break
+        case "noise_levels":
+            penalty = clampMax((latestValue - average(numericValues)) / 20, 1)
+            break
+        case "temperature":
+            penalty = clampMax(Math.abs(latestValue - 22.5) / 10, 1)
+            break
+        case "humidity":
+            penalty = clampMax(Math.abs(latestValue - 50) / 30, 1)
+            break
+        default:
+            return null
+    }
+
+    return Number((100 * (1 - penalty)).toFixed(2))
+}
+
+function calculateMetricScoresFromSamples(samples = [], now = Date.now()) {
+    const scoringSamples = samples.filter(
+        (sample) => normalizeScoreTimestamp(sample?.timestamp) >= now - ESG_SCORE_LOOKBACK_MS
+    )
+    const metricBuckets = groupSamplesBy(scoringSamples, (sample) => sample?.metric_type)
+    const metricScores = {}
+
+    ESG_COMPONENT_ORDER.forEach((metricType) => {
+        const score = getMetricComponentScore(metricType, metricBuckets.get(metricType) || [])
+
+        if (Number.isFinite(score)) {
+            metricScores[metricType] = score
+        }
+    })
+
+    return metricScores
+}
+
+function calculateWeightedEsgScore(metricScores = {}) {
+    let weightedTotal = 0
+    let totalWeight = 0
+
+    ESG_COMPONENT_ORDER.forEach((metricType) => {
+        const score = Number(metricScores?.[metricType])
+        const weight = Number(ESG_COMPONENT_WEIGHTS[metricType] || 0)
+
+        if (!Number.isFinite(score) || !Number.isFinite(weight) || weight <= 0) {
+            return
+        }
+
+        weightedTotal += score * weight
+        totalWeight += weight
+    })
+
+    if (totalWeight === 0) {
+        return null
+    }
+
+    return Number((weightedTotal / totalWeight).toFixed(2))
 }
 
 function getByPath(payload, dotPath) {
@@ -934,6 +1078,10 @@ function createApp(options = {}) {
     const kalshiHttpClient = options.kalshiHttpClient || axios
     const mwbeHttpClient = options.mwbeHttpClient || axios
     const firebaseHttpClient = options.firebaseHttpClient || axios
+    const legacyIotDataResponse = options.legacyIotDataResponse === true
+    const pushMetrics = typeof options.pushMetricsToGrafana === "function"
+        ? options.pushMetricsToGrafana
+        : pushMetricsToGrafana
     const app = express()
     const registry = new promClient.Registry()
     const state = {
@@ -1470,6 +1618,7 @@ function createApp(options = {}) {
 
     function updateEsgState(samples) {
         const config = getEsgConfig()
+        const computedAt = Date.now()
 
         samples.forEach((sample) => {
             state.sampleBuffer.push(sample)
@@ -1482,14 +1631,20 @@ function createApp(options = {}) {
 
         const bufferedSamples = config.mode === "streaming"
             ? Object.values(state.latestSeries)
-            : state.sampleBuffer.filter((sample) => sample.timestamp >= Date.now() - config.windowMs)
+            : state.sampleBuffer.filter((sample) => sample.timestamp >= computedAt - config.windowMs)
+        const scoringSamples = bufferedSamples.filter(
+            (sample) => normalizeSampleTimestamp(sample.timestamp) >= computedAt - ESG_SCORE_LOOKBACK_MS
+        )
 
         esgBufferSizeMetric.set(bufferedSamples.length)
+        esgMetricScoreMetric.reset()
+        esgSensorScoreMetric.reset()
+        esgEnvironmentScoreMetric.reset()
 
-        if (bufferedSamples.length === 0) {
+        if (scoringSamples.length === 0) {
             state.lastEsgScore = {
                 mode: config.mode,
-                computedAt: Date.now(),
+                computedAt,
                 overall: null,
                 sampleCount: 0,
                 metricScores: {},
@@ -1498,64 +1653,48 @@ function createApp(options = {}) {
             return
         }
 
-        const metricBuckets = {}
-        const sensorBuckets = {}
+        const metricScores = calculateMetricScoresFromSamples(scoringSamples, computedAt)
+        const overall = calculateWeightedEsgScore(metricScores)
+        const sensorScores = {}
         const sensorLabels = {}
+        const sensorBuckets = groupSamplesBy(scoringSamples, (sample) => sample.sensor_id)
 
-        bufferedSamples.forEach((sample) => {
-            metricBuckets[sample.metric_type] = metricBuckets[sample.metric_type] || []
-            metricBuckets[sample.metric_type].push(sample.esg_score)
-
-            sensorBuckets[sample.sensor_id] = sensorBuckets[sample.sensor_id] || []
-            sensorBuckets[sample.sensor_id].push(sample.esg_score)
-
+        scoringSamples.forEach((sample) => {
             sensorLabels[sample.sensor_id] = normalizeDeviceOwnerLabels(sample)
         })
 
-        const metricScores = {}
-        let weightedTotal = 0
-        let totalWeight = 0
-
-        Object.keys(metricBuckets).forEach((metricType) => {
-            const scores = metricBuckets[metricType]
-            const average = scores.reduce((sum, value) => sum + value, 0) / scores.length
-            const rounded = Number(average.toFixed(2))
-            const weight = Number(config.weights?.[metricType] ?? 1)
-
-            metricScores[metricType] = rounded
-            weightedTotal += rounded * weight
-            totalWeight += weight
-            esgMetricScoreMetric.set({ metric_type: metricType }, rounded)
+        Object.entries(metricScores).forEach(([metricType, score]) => {
+            esgMetricScoreMetric.set({ metric_type: metricType }, score)
         })
 
-        const sensorScores = {}
-        Object.keys(sensorBuckets).forEach((sensorId) => {
-            const scores = sensorBuckets[sensorId]
-            const average = scores.reduce((sum, value) => sum + value, 0) / scores.length
-            const rounded = Number(average.toFixed(2))
-            sensorScores[sensorId] = rounded
+        sensorBuckets.forEach((sensorSamples, sensorId) => {
+            const sensorScore = calculateWeightedEsgScore(
+                calculateMetricScoresFromSamples(sensorSamples, computedAt)
+            )
+
+            if (!Number.isFinite(sensorScore)) {
+                return
+            }
+
+            sensorScores[sensorId] = sensorScore
             esgSensorScoreMetric.set(
                 {
                     sensor_id: sensorId,
                     ...normalizeDeviceOwnerLabels(sensorLabels[sensorId]),
                 },
-                rounded
+                sensorScore
             )
         })
 
-        const overall = totalWeight > 0
-            ? Number((weightedTotal / totalWeight).toFixed(2))
-            : null
-
-        if (overall !== null) {
+        if (Number.isFinite(overall)) {
             esgEnvironmentScoreMetric.set({ scope: "overall" }, overall)
         }
 
         state.lastEsgScore = {
             mode: config.mode,
-            computedAt: Date.now(),
+            computedAt,
             overall,
-            sampleCount: bufferedSamples.length,
+            sampleCount: scoringSamples.length,
             metricScores,
             sensorScores,
         }
@@ -1691,65 +1830,69 @@ function createApp(options = {}) {
 
         const metadataBySensorId = new Map()
 
-        const { data: devices, error: devicesError } = await supabase
-            .from("devices")
-            .select("device_id, owner_uid, name")
-            .in("device_id", uniqueSensorIds)
+        try {
+            const { data: devices, error: devicesError } = await supabase
+                .from("devices")
+                .select("device_id, owner_uid, name")
+                .in("device_id", uniqueSensorIds)
 
-        if (devicesError) {
-            console.warn(`Failed to load device owner metadata: ${devicesError.message}`)
-            return metadataBySensorId
-        }
-
-        const ownerKeys = [...new Set((devices || []).map((device) => device.owner_uid).filter(Boolean))]
-        const ownersByKey = new Map()
-
-        const ownerUuidKeys = ownerKeys.filter(isUuid)
-        if (ownerUuidKeys.length > 0) {
-            const { data: ownersById, error: ownersByIdError } = await supabase
-                .from("users")
-                .select("id, email, firebase_uid")
-                .in("id", ownerUuidKeys)
-
-            if (ownersByIdError) {
-                console.warn(`Failed to load owner metadata by user id: ${ownersByIdError.message}`)
-            } else {
-                ;(ownersById || []).forEach((owner) => {
-                    ownersByKey.set(owner.id, owner)
-                    if (owner.firebase_uid) {
-                        ownersByKey.set(owner.firebase_uid, owner)
-                    }
-                })
+            if (devicesError) {
+                console.warn(`Failed to load device owner metadata: ${devicesError.message}`)
+                return metadataBySensorId
             }
-        }
 
-        const ownerFirebaseUidKeys = ownerKeys.filter((ownerKey) => !isUuid(ownerKey))
-        if (ownerFirebaseUidKeys.length > 0) {
-            const { data: ownersByFirebaseUid, error: ownersByFirebaseUidError } = await supabase
-                .from("users")
-                .select("id, email, firebase_uid")
-                .in("firebase_uid", ownerFirebaseUidKeys)
+            const ownerKeys = [...new Set((devices || []).map((device) => device.owner_uid).filter(Boolean))]
+            const ownersByKey = new Map()
 
-            if (ownersByFirebaseUidError) {
-                console.warn(`Failed to load owner metadata by firebase uid: ${ownersByFirebaseUidError.message}`)
-            } else {
-                ;(ownersByFirebaseUid || []).forEach((owner) => {
-                    ownersByKey.set(owner.id, owner)
-                    if (owner.firebase_uid) {
-                        ownersByKey.set(owner.firebase_uid, owner)
-                    }
-                })
+            const ownerUuidKeys = ownerKeys.filter(isUuid)
+            if (ownerUuidKeys.length > 0) {
+                const { data: ownersById, error: ownersByIdError } = await supabase
+                    .from("users")
+                    .select("id, email, firebase_uid")
+                    .in("id", ownerUuidKeys)
+
+                if (ownersByIdError) {
+                    console.warn(`Failed to load owner metadata by user id: ${ownersByIdError.message}`)
+                } else {
+                    ;(ownersById || []).forEach((owner) => {
+                        ownersByKey.set(owner.id, owner)
+                        if (owner.firebase_uid) {
+                            ownersByKey.set(owner.firebase_uid, owner)
+                        }
+                    })
+                }
             }
-        }
 
-        ;(devices || []).forEach((device) => {
-            const owner = ownersByKey.get(device.owner_uid)
-            metadataBySensorId.set(device.device_id, normalizeDeviceOwnerLabels({
-                owner_uid: owner?.firebase_uid || device.owner_uid || DEFAULT_DEVICE_OWNER_LABELS.owner_uid,
-                owner_email: owner?.email || DEFAULT_DEVICE_OWNER_LABELS.owner_email,
-                device_name: device.name || device.device_id || DEFAULT_DEVICE_OWNER_LABELS.device_name,
-            }))
-        })
+            const ownerFirebaseUidKeys = ownerKeys.filter((ownerKey) => !isUuid(ownerKey))
+            if (ownerFirebaseUidKeys.length > 0) {
+                const { data: ownersByFirebaseUid, error: ownersByFirebaseUidError } = await supabase
+                    .from("users")
+                    .select("id, email, firebase_uid")
+                    .in("firebase_uid", ownerFirebaseUidKeys)
+
+                if (ownersByFirebaseUidError) {
+                    console.warn(`Failed to load owner metadata by firebase uid: ${ownersByFirebaseUidError.message}`)
+                } else {
+                    ;(ownersByFirebaseUid || []).forEach((owner) => {
+                        ownersByKey.set(owner.id, owner)
+                        if (owner.firebase_uid) {
+                            ownersByKey.set(owner.firebase_uid, owner)
+                        }
+                    })
+                }
+            }
+
+            ;(devices || []).forEach((device) => {
+                const owner = ownersByKey.get(device.owner_uid)
+                metadataBySensorId.set(device.device_id, normalizeDeviceOwnerLabels({
+                    owner_uid: owner?.firebase_uid || device.owner_uid || DEFAULT_DEVICE_OWNER_LABELS.owner_uid,
+                    owner_email: owner?.email || DEFAULT_DEVICE_OWNER_LABELS.owner_email,
+                    device_name: device.name || device.device_id || DEFAULT_DEVICE_OWNER_LABELS.device_name,
+                }))
+            })
+        } catch (error) {
+            console.warn(`Failed to load device owner metadata: ${error.message}`)
+        }
 
         return metadataBySensorId
     }
@@ -1765,10 +1908,11 @@ function createApp(options = {}) {
             value: sample.value,
             recorded_at: new Date(normalizeSampleTimestamp(sample.timestamp)).toISOString(),
         }))
+        const insertPayload = rows.length === 1 ? rows[0] : rows
 
         const { error } = await supabase
             .from("sensor_readings")
-            .insert(rows)
+            .insert(insertPayload)
 
         if (error) {
             throw new Error(error.message)
@@ -1835,8 +1979,8 @@ function createApp(options = {}) {
         )
 
         samples.forEach((sample, index) => {
-            const metricType = String(sample.metric_type ?? "").toLowerCase()
-            const numericValue = Number(sample.value)
+            const metricType = normalizeMetricType(sample.metric_type)
+            const numericValue = parseFiniteNumber(sample.value)
             const sensorId = String(sample.sensor_id || "")
             const ownerMetadata = normalizeDeviceOwnerLabels({
                 ...ownerMetadataBySensorId.get(sensorId),
@@ -1845,7 +1989,7 @@ function createApp(options = {}) {
                 device_name: sample.device_name || ownerMetadataBySensorId.get(sensorId)?.device_name || sensorId,
             })
 
-            if (!sample.sensor_id || !METRIC_TYPES.includes(metricType) || !Number.isFinite(numericValue)) {
+            if (!sample.sensor_id || !isSupportedMetricType(metricType) || numericValue === null) {
                 rejected.push({
                     index,
                     sample,
@@ -1875,7 +2019,7 @@ function createApp(options = {}) {
             } catch (error) {
                 console.warn(`Sensor reading persistence failed: ${error.message}`)
             }
-            pushResult = await pushMetricsToGrafana(buildDynamicTimeSeries(accepted))
+            pushResult = await pushMetrics(buildDynamicTimeSeries(accepted))
         }
 
         return { accepted, rejected, pushResult }
@@ -1889,7 +2033,7 @@ function createApp(options = {}) {
         }
 
         const requestedSensorId = String(options.sensor_id || "").trim()
-        const requestedMetricType = String(options.metric_type || "").trim().toLowerCase()
+        const requestedMetricType = normalizeMetricType(options.metric_type)
 
         return state.sampleBuffer
             .filter((sample) => Number(sample.timestamp) >= selectedWindow.sinceMs)
@@ -2866,6 +3010,21 @@ function createApp(options = {}) {
         }
     }
 
+    async function respondWithFirebaseSync(res, syncOptions) {
+        try {
+            const result = await syncFirebaseData(syncOptions)
+
+            res.json({
+                status: "success",
+                ...result,
+            })
+        } catch (error) {
+            state.lastFirebaseError = error.message
+            console.error(error.message)
+            res.status(Number(error.statusCode) || 500).json({ error: "Failed to sync Firebase data", detail: error.message })
+        }
+    }
+
     function scheduleMwbePolling() {
         const config = getMwbeConfig()
 
@@ -2998,11 +3157,11 @@ function createApp(options = {}) {
 
     app.get("/iot/export/:range", async (req, res) => {
         try {
-            const metricType = String(req.query.metric_type || "").trim().toLowerCase()
+            const metricType = normalizeMetricType(req.query.metric_type)
 
-            if (metricType && !METRIC_TYPES.includes(metricType)) {
+            if (metricType && !isSupportedMetricType(metricType)) {
                 res.status(400).json({
-                    error: `metric_type must be one of: ${METRIC_TYPES.join(", ")}`,
+                    error: getMetricTypeValidationMessage(),
                 })
                 return
             }
@@ -3377,21 +3536,16 @@ function createApp(options = {}) {
             const decodedToken = await verifyFirebaseUserFromRequest(req)
             const requestedOwnerUid = String(req.body?.ownerUid || req.query.ownerUid || "").trim()
             const ownerUid = decodedToken?.uid || requestedOwnerUid
+
             if (decodedToken?.uid && requestedOwnerUid && requestedOwnerUid !== decodedToken.uid) {
                 res.status(403).json({ error: "Authenticated user does not match requested ownerUid" })
                 return
             }
 
-            const deviceId = String(req.body?.deviceId || req.query.deviceId || "").trim()
-            const result = await syncFirebaseData({
+            await respondWithFirebaseSync(res, {
                 ownerUid,
-                deviceId,
+                deviceId: String(req.body?.deviceId || req.query.deviceId || "").trim(),
                 authToken: extractFirebaseAuthToken(req),
-            })
-
-            res.json({
-                status: "success",
-                ...result,
             })
         } catch (error) {
             state.lastFirebaseError = error.message
@@ -3403,15 +3557,9 @@ function createApp(options = {}) {
     app.post("/firebase/sync/:deviceId", async (req, res) => {
         try {
             await verifyFirebaseUserFromRequest(req)
-            const deviceId = String(req.params.deviceId || "").trim()
-            const result = await syncFirebaseData({
-                deviceId,
+            await respondWithFirebaseSync(res, {
+                deviceId: String(req.params.deviceId || "").trim(),
                 authToken: extractFirebaseAuthToken(req),
-            })
-
-            res.json({
-                status: "success",
-                ...result,
             })
         } catch (error) {
             state.lastFirebaseError = error.message
@@ -3436,7 +3584,11 @@ function createApp(options = {}) {
                 return
             }
 
-            res.json({ status: "success", sample: result.accepted[0], pushResult: result.pushResult })
+            res.json(
+                legacyIotDataResponse
+                    ? { status: "success" }
+                    : { status: "success", sample: result.accepted[0], pushResult: result.pushResult }
+            )
         } catch (error) {
             console.error(error.message)
             res.status(500).json({ error: "Failed to process iot/data" })
@@ -3478,6 +3630,8 @@ function createApp(options = {}) {
             const requestSeed = payload.seed
             const requestedMin = payload.min
             const requestedMax = payload.max
+            const numericRequestedMin = parseFiniteNumber(requestedMin)
+            const numericRequestedMax = parseFiniteNumber(requestedMax)
 
             if (!Number.isInteger(count) || count < 1 || count > 100) {
                 res.status(400).json({ error: "count must be an integer between 1 and 100" })
@@ -3487,9 +3641,9 @@ function createApp(options = {}) {
             if (
                 (requestedMin !== undefined || requestedMax !== undefined)
                 && (
-                    !Number.isFinite(Number(requestedMin))
-                    || !Number.isFinite(Number(requestedMax))
-                    || Number(requestedMin) >= Number(requestedMax)
+                    numericRequestedMin === null
+                    || numericRequestedMax === null
+                    || numericRequestedMin >= numericRequestedMax
                 )
             ) {
                 res.status(400).json({ error: "min and max must be finite numbers and min must be less than max" })
@@ -3508,11 +3662,11 @@ function createApp(options = {}) {
                 METRIC_TYPES.forEach((metricType) => {
                     const threshold = resolveThresholds()[metricType]
                     const range = threshold.max - threshold.min
-                    const min = Number.isFinite(Number(requestedMin))
-                        ? Number(requestedMin)
+                    const min = numericRequestedMin !== null
+                        ? numericRequestedMin
                         : threshold.min - range * 0.25
-                    const max = Number.isFinite(Number(requestedMax))
-                        ? Number(requestedMax)
+                    const max = numericRequestedMax !== null
+                        ? numericRequestedMax
                         : threshold.max + range * 0.25
                     const value = createRandomValueWithGenerator(min, max, random)
 
@@ -3526,13 +3680,29 @@ function createApp(options = {}) {
             }
 
             const result = await ingestSamples(samples, "dummy")
+            const derivedEsgSamples = [...new Set(result.accepted.map((sample) => sample.sensor_id))]
+                .map((sensorId) => {
+                    const sensorScore = Number(state.lastEsgScore?.sensorScores?.[sensorId])
+
+                    if (!Number.isFinite(sensorScore)) {
+                        return null
+                    }
+
+                    return {
+                        sensor_id: sensorId,
+                        metric_type: "esg_environment_score",
+                        value: sensorScore,
+                        timestamp: state.lastEsgScore?.computedAt || Date.now(),
+                    }
+                })
+                .filter(Boolean)
 
             res.json({
                 status: "success",
-                generated: result.accepted.length,
+                generated: result.accepted.length + derivedEsgSamples.length,
                 rejected: result.rejected.length,
                 seed: String(resolvedSeed),
-                samples: result.accepted,
+                samples: [...result.accepted, ...derivedEsgSamples],
                 pushResult: result.pushResult,
             })
         } catch (error) {
