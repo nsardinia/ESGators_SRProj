@@ -66,6 +66,14 @@ const usdFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
 })
+const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+})
 
 function formatDate(value) {
   if (!value) {
@@ -78,7 +86,7 @@ function formatDate(value) {
     return String(value)
   }
 
-  return parsed.toLocaleString()
+  return dateTimeFormatter.format(parsed)
 }
 
 function formatCoordinateValue(value) {
@@ -140,7 +148,7 @@ function formatUnixTimestamp(value) {
   }
 
   const timestampMs = numericValue > 1_000_000_000_000 ? numericValue : numericValue * 1000
-  return new Date(timestampMs).toLocaleString()
+  return dateTimeFormatter.format(new Date(timestampMs))
 }
 
 function parseOrderTimestamp(order) {
