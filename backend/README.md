@@ -48,8 +48,11 @@ For local development, the `mwbe` service now exposes a compatibility feed at
 
 Optional Firebase RTDB sync config:
 - `FIREBASE_SERVICE_ACCOUNT_JSON`
+- `FIREBASE_CLIENT_EMAIL`
+- `FIREBASE_PRIVATE_KEY`
 - `FIREBASE_DATABASE_URL`
 - `FIREBASE_PROJECT_ID`
+- `FIREBASE_SERVICE_ACCOUNT_PATH`
 - `VITE_FIREBASE_PROJECT_ID`
 - `FIREBASE_DEVICE_ROOT_PATH`
 - `FIREBASE_SOURCE_NAME`
@@ -110,6 +113,8 @@ MWBE_SYNC_INTERVAL_MS=60000
 MWBE_SYNC_ON_START=false
 
 FIREBASE_DATABASE_URL=https://senior-project-esgators-default-rtdb.firebaseio.com
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxx@senior-project-esgators.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\\nreplace-me\\n-----END PRIVATE KEY-----\\n
 VITE_FIREBASE_PROJECT_ID=senior-project-esgators
 FIREBASE_DEVICE_ROOT_PATH=users
 FIREBASE_SOURCE_NAME=firebase-rtdb
@@ -321,7 +326,7 @@ If a Firebase `updatedAtMs` value is not an absolute Unix timestamp, the backend
 
 For direct per-device reads, the backend resolves Firebase payloads from `users/{ownerUid}/devices/{deviceId}`.
 
-If `backend/firebase-key.json` or `FIREBASE_SERVICE_ACCOUNT_JSON` is not available yet, the backend falls back to read-only Firebase REST GET using `FIREBASE_DATABASE_URL` or `VITE_FIREBASE_PROJECT_ID`.
+If `backend/firebase-key.json`, `FIREBASE_SERVICE_ACCOUNT_JSON`, or the split env vars `FIREBASE_PROJECT_ID` + `FIREBASE_CLIENT_EMAIL` + `FIREBASE_PRIVATE_KEY` are not available yet, the backend falls back to read-only Firebase REST GET using `FIREBASE_DATABASE_URL` or `VITE_FIREBASE_PROJECT_ID`.
 That fallback only works when RTDB security rules allow read access for the requested path.
 
 ## Prometheus metrics for Grafana
