@@ -6,7 +6,7 @@ const path = require("node:path")
 const DEFAULT_FIREBASE_PROJECT_ID = "senior-project-esgators"
 
 function normalizePrivateKey(privateKey) {
-  return String(privateKey || "").replace(/\\n/g, "\n").trim()
+  return String(privateKey || "").replace(/\\n/g, "\n")
 }
 
 function readServiceAccountFromEnv() {
@@ -20,7 +20,7 @@ function readServiceAccountFromEnv() {
   const clientEmail = String(process.env.FIREBASE_CLIENT_EMAIL || "").trim()
   const privateKey = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY)
 
-  if (!projectId || !clientEmail || !privateKey) {
+  if (!projectId || !clientEmail || !privateKey.trim()) {
     return null
   }
 
@@ -35,6 +35,18 @@ function readServiceAccountFromEnv() {
   }
 }
 
+function readServiceAccountFromFile(serviceAccountPath) {
+  const resolvedPath = path.isAbsolute(serviceAccountPath)
+    ? serviceAccountPath
+    : path.resolve(__dirname, serviceAccountPath)
+
+  if (!fs.existsSync(resolvedPath)) {
+    return null
+  }
+
+  return JSON.parse(fs.readFileSync(resolvedPath, "utf8"))
+}
+
 function loadServiceAccount() {
   const fromEnv = readServiceAccountFromEnv()
 
@@ -42,20 +54,24 @@ function loadServiceAccount() {
     return fromEnv
   }
 
-  const configuredPath = String(
-    process.env.FIREBASE_SERVICE_ACCOUNT_PATH || "./firebase-key.json"
-  ).trim()
-  const resolvedPath = path.isAbsolute(configuredPath)
-    ? configuredPath
-    : path.resolve(__dirname, configuredPath)
+  const configuredPath = String(process.env.FIREBASE_SERVICE_ACCOUNT_PATH || "").trim()
+  const candidatePaths = [
+    configuredPath,
+    "./firebase-key.json",
+    "./firebaseServiceKeys.json",
+  ].filter(Boolean)
 
-  if (!fs.existsSync(resolvedPath)) {
-    throw new Error(
-      "Firebase credentials not found. Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY, or add backend/firebase-key.json."
-    )
+  for (const candidatePath of candidatePaths) {
+    const serviceAccount = readServiceAccountFromFile(candidatePath)
+
+    if (serviceAccount) {
+      return serviceAccount
+    }
   }
 
-  return JSON.parse(fs.readFileSync(resolvedPath, "utf8"))
+  throw new Error(
+    "Firebase credentials not found. Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY, or add backend/firebase-key.json."
+  )
 }
 
 function resolveDatabaseUrl(serviceAccount) {
@@ -78,11 +94,11 @@ function resolveDatabaseUrl(serviceAccount) {
 
 const serviceAccount = loadServiceAccount()
 
-if (!admin.apps.length) {
-  admin.initializeApp({
+const firebaseApp = admin.apps.length > 0
+  ? admin.app()
+  : admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
     databaseURL: resolveDatabaseUrl(serviceAccount),
   })
-}
 
-module.exports = admin.database()
+module.exports = firebaseApp.database()

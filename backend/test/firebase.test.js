@@ -19,6 +19,12 @@ test("firebase module initializes admin SDK from split env vars", async () => {
         config: null,
     }
     const fakeDatabase = { name: "fake-db" }
+    const fakeFirebaseApp = {
+        name: "[DEFAULT]",
+        database() {
+            return fakeDatabase
+        },
+    }
     const fakeAdmin = {
         apps: [],
         credential: {
@@ -29,11 +35,11 @@ test("firebase module initializes admin SDK from split env vars", async () => {
         },
         initializeApp(config) {
             observed.config = config
-            this.apps.push({ name: "[DEFAULT]" })
-            return { name: "[DEFAULT]" }
+            this.apps.push(fakeFirebaseApp)
+            return fakeFirebaseApp
         },
-        database() {
-            return fakeDatabase
+        app() {
+            return fakeFirebaseApp
         },
     }
 
@@ -64,7 +70,7 @@ test("firebase module initializes admin SDK from split env vars", async () => {
         assert.equal(observed.serviceAccount.client_email, process.env.FIREBASE_CLIENT_EMAIL)
         assert.equal(
             observed.serviceAccount.private_key,
-            "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----"
+            "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----\n"
         )
     } finally {
         Module._load = originalLoad

@@ -828,6 +828,7 @@ test("firebase sync can read owner device paths with a Firebase ID token when ad
     const firebaseHttpClient = async (request) => {
         assert.equal(request.method, "GET")
         assert.equal(request.params.auth, "firebase-id-token")
+        assert.equal(request.headers.Authorization, "Bearer firebase-id-token")
         assert.equal(
             request.url,
             `${DEFAULT_FIREBASE_DATABASE_URL}/users/${ownerFirebaseUid}/devices/${deviceId}.json`

@@ -1,6 +1,9 @@
 import { useEffect } from "react"
-import { BACKEND_API_BASE_URL, MWBE_API_BASE_URL, getAuthHeaders } from "../lib/api"
+import { get, ref } from "firebase/database"
+import { API_BASE_URL, BACKEND_API_BASE_URL, MWBE_API_BASE_URL, getAuthHeaders } from "../lib/api"
 import { useAuth } from "./AuthContext"
+import { database } from "../lib/firebase-database"
+import { createSampleFingerprint, normalizeFirebaseDevicePayload } from "../lib/firebase-telemetry"
 
 const DEVICE_POLLING_INTERVAL_MS = 5000
 
@@ -15,6 +18,7 @@ function RegisteredDeviceSync() {
     let ignore = false
     let syncInFlight = false
     let ownerFirebaseUid = ""
+    const uploadedFingerprintsBySeries = {}
 
     const ensureOwner = async () => {
       const ownerResponse = await fetch(`${MWBE_API_BASE_URL}/users`, {
@@ -41,8 +45,24 @@ function RegisteredDeviceSync() {
       return String(ownerPayload.user.firebase_uid || "").trim()
     }
 
+    const loadOwnedDevices = async () => {
+      const response = await fetch(`${API_BASE_URL}/devices/owned`, {
+        headers: await getAuthHeaders(user),
+      })
+      const payload = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        throw new Error(
+          payload.message ||
+          `Failed to load nodes from ${API_BASE_URL}/devices/owned`
+        )
+      }
+
+      return Array.isArray(payload.devices) ? payload.devices : []
+    }
+
     const syncRegisteredDevices = async () => {
-      if (ignore || syncInFlight) {
+      if (ignore || syncInFlight || !database) {
         return
       }
 
@@ -53,13 +73,56 @@ function RegisteredDeviceSync() {
           ownerFirebaseUid = await ensureOwner()
         }
 
-        const response = await fetch(`${BACKEND_API_BASE_URL}/firebase/sync`, {
+        const devices = await loadOwnedDevices()
+
+        if (devices.length === 0) {
+          return
+        }
+
+        const snapshots = await Promise.all(
+          devices.map((device) =>
+            get(ref(database, `users/${ownerFirebaseUid}/devices/${device.deviceId}`))
+          )
+        )
+
+        const samples = snapshots.flatMap((snapshot, index) => {
+          const device = devices[index]
+
+          return normalizeFirebaseDevicePayload(
+            device?.deviceId,
+            snapshot.val()
+          ).map((sample) => ({
+            ...sample,
+            owner_uid: ownerFirebaseUid,
+            owner_email: user.email,
+            device_name: device?.name || sample.sensor_id,
+          }))
+        })
+
+        const changedSamples = samples.filter((sample) => {
+          const seriesKey = `${sample.sensor_id}:${sample.metric_type}:firebase-rtdb`
+          const fingerprint = createSampleFingerprint(sample)
+
+          if (uploadedFingerprintsBySeries[seriesKey] === fingerprint) {
+            return false
+          }
+
+          uploadedFingerprintsBySeries[seriesKey] = fingerprint
+          return true
+        })
+
+        if (changedSamples.length === 0) {
+          return
+        }
+
+        const response = await fetch(`${BACKEND_API_BASE_URL}/iot/data/batch`, {
           method: "POST",
           headers: await getAuthHeaders(user, {
             "Content-Type": "application/json",
           }),
           body: JSON.stringify({
-            ownerUid: ownerFirebaseUid,
+            source: "firebase-rtdb",
+            samples: changedSamples,
           }),
         })
 

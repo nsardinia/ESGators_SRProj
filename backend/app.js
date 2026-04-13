@@ -1096,6 +1096,7 @@ function createApp(options = {}) {
                 process.env.FIREBASE_DEVICE_ROOT_PATH || DEFAULT_FIREBASE_DEVICE_ROOT_PATH
             ).replace(/^\/+|\/+$/g, ""),
             source: String(process.env.FIREBASE_SOURCE_NAME || "firebase-rtdb"),
+            accessMode: firebaseDb ? "admin-sdk" : "rest-fallback",
             backgroundPollingEnabled: parseBoolean(
                 process.env.FIREBASE_BACKGROUND_POLLING_ENABLED,
                 false
@@ -2294,6 +2295,7 @@ function createApp(options = {}) {
             method: "GET",
             url: `${config.databaseUrl}/${pathToRead}.json`,
             params: authToken ? { auth: authToken } : {},
+            headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
             timeout: 10000,
             validateStatus: (status) => status >= 200 && status < 300,
         })
