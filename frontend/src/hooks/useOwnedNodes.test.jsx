@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import useOwnedNodes from "./useOwnedNodes"
 
 const { mockGetDatabase, mockOnValue, mockRef } = vi.hoisted(() => ({
@@ -337,5 +337,106 @@ describe("useOwnedNodes", () => {
         updatedAtMs: null,
       },
     })
+  })
+
+  it("updates the node timestamp when timestamp-free Firebase telemetry changes after subscription", async () => {
+    const callbacks = []
+
+    vi.useFakeTimers()
+
+    try {
+      vi.setSystemTime(new Date("2026-04-14T12:00:00.000Z"))
+
+      global.fetch = vi.fn(async (url) => {
+        const normalizedUrl = String(url)
+
+        if (normalizedUrl.endsWith("/users")) {
+          return {
+            ok: true,
+            json: async () => ({
+              user: {
+                firebase_uid: "owner-123",
+              },
+            }),
+          }
+        }
+
+        if (normalizedUrl.includes("/devices/owned")) {
+          return {
+            ok: true,
+            json: async () => ({
+              devices: [
+                {
+                  deviceId: "node-4",
+                  name: "Live timestamp-free node",
+                  description: "Publishes values without a device timestamp",
+                  status: "claimed",
+                },
+              ],
+            }),
+          }
+        }
+
+        throw new Error(`Unhandled fetch URL: ${normalizedUrl}`)
+      })
+
+      mockOnValue.mockImplementation((reference, handleValue) => {
+        callbacks.push(handleValue)
+        handleValue({
+          val: () => ({
+            sht30: {
+              latest: {
+                temperatureC: 22.1,
+                humidityPct: 46.8,
+              },
+            },
+          }),
+        })
+        return vi.fn()
+      })
+
+      const user = {
+        uid: "firebase-user-1",
+        email: "owner@example.com",
+        displayName: "Owner",
+        getIdToken: vi.fn(async () => "test-token"),
+      }
+
+      const { result } = renderHook(() => useOwnedNodes(user))
+
+      await act(async () => {
+        await vi.runAllTimersAsync()
+      })
+
+      expect(result.current.createdNodes[0]?.telemetry?.temperatureC).toBe(22.1)
+      expect(result.current.createdNodes[0]?.updatedAtMs).toBeNull()
+
+      vi.setSystemTime(new Date("2026-04-14T12:05:00.000Z"))
+
+      act(() => {
+        callbacks[0]({
+          val: () => ({
+            sht30: {
+              latest: {
+                temperatureC: 22.9,
+                humidityPct: 47.1,
+              },
+            },
+          }),
+        })
+      })
+
+      expect(result.current.createdNodes[0]).toMatchObject({
+        id: "node-4",
+        updatedAtMs: Date.parse("2026-04-14T12:05:00.000Z"),
+        telemetry: {
+          temperatureC: 22.9,
+          humidityPct: 47.1,
+          updatedAtMs: null,
+        },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
