@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for backend-bitter-morning-1805 on 2026-03-02T22:37:33+09:00
+# fly.toml app configuration file generated for esgators-backend-ns-20260414 on 2026-03-02T22:37:33+09:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'backend-bitter-morning-1805'
+app = 'esgators-backend-ns-20260414'
 primary_region = 'nrt'
 
 [build]

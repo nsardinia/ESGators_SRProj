@@ -3,7 +3,7 @@ source backend/.env
 set +a
 
 fly secrets set -a your-mcp-app-name-winter-thunder-1708 \
-  MCP_BACKEND_BASE_URL=https://backend-bitter-morning-1805.fly.dev \
+  MCP_BACKEND_BASE_URL=https://esgators-backend-ns-20260414.fly.dev \
   SUPABASE_URL="$SUPABASE_URL" \
   SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
   FIREBASE_DATABASE_URL="$FIREBASE_DATABASE_URL" \

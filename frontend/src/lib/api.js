@@ -8,7 +8,7 @@
 const LOCAL_MWBE_API_BASE_URL = "http://localhost:3000"
 const PRODUCTION_MWBE_API_BASE_URL = "https://srprojmwbe.fly.dev"
 const LOCAL_BACKEND_API_BASE_URL = "http://localhost:5000"
-const PRODUCTION_BACKEND_API_BASE_URL = "https://backend-bitter-morning-1805.fly.dev"
+const PRODUCTION_BACKEND_API_BASE_URL = "https://esgators-backend-ns-20260414.fly.dev"
 
 function normalizeBaseUrl(value) {
   return String(value || "").trim().replace(/\/$/, "")
