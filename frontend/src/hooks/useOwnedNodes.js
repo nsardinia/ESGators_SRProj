@@ -52,6 +52,7 @@ function mapOwnedDevice(device, previousNode) {
       ? device.isLocationUnknown
       : (previousNode?.isLocationUnknown ?? true),
     telemetry: previousNode?.telemetry || null,
+    rawTelemetry: previousNode?.rawTelemetry || null,
     updatedAtMs: previousNode?.updatedAtMs || null,
   }
 }
@@ -434,7 +435,8 @@ function useOwnedNodes(user) {
       onValue(
         ref(database, `users/${owner.firebase_uid}/devices/${node.id}`),
         (snapshot) => {
-          const telemetry = normalizeNodeTelemetry(snapshot.val())
+          const rawTelemetry = snapshot.val()
+          const telemetry = normalizeNodeTelemetry(rawTelemetry)
 
           setWarning("")
 
@@ -446,6 +448,7 @@ function useOwnedNodes(user) {
 
               return {
                 ...currentNode,
+                rawTelemetry,
                 telemetry,
                 status: deriveNodeStatus(telemetry, currentNode.status),
                 updatedAtMs: telemetry?.updatedAtMs ?? null,

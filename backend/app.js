@@ -35,7 +35,9 @@ const DEFAULT_THRESHOLDS = {
 }
 const DEFAULT_FIREBASE_PROJECT_ID = "senior-project-esgators"
 const DEFAULT_FIREBASE_DATABASE_URL = `https://${DEFAULT_FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com`
-const DEFAULT_FIREBASE_DEVICE_ROOT_PATH = "devices"
+const DEFAULT_FIREBASE_DEVICE_ROOT_PATH = "users"
+const FIREBASE_USER_DEVICES_PATH_SEGMENT = "devices"
+const DEFAULT_MWBE_API_BASE_URL = "https://srprojmwbe.fly.dev"
 const DEFAULT_FIREBASE_SYNC_INTERVAL_MS = 5000
 const DEFAULT_FIREBASE_OWNER_SYNC_INTERVAL_MS = 1000
 const DEFAULT_OPENAI_RESPONSES_API_URL = "https://api.openai.com/v1/responses"
@@ -87,6 +89,10 @@ const DEFAULT_ALLOWED_WEB_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:4173",
     "http://127.0.0.1:4173",
+    "https://es-gators.vercel.app",
+]
+const DEFAULT_ALLOWED_WEB_ORIGIN_PATTERNS = [
+    /^https:\/\/es-gators(?:-[a-z0-9-]+)?\.vercel\.app$/i,
 ]
 const FIREBASE_SENSOR_MAPPINGS = [
     { bucket: "sht30", field: "temperatureC", metric_type: "temperature" },
@@ -97,6 +103,16 @@ const FIREBASE_SENSOR_MAPPINGS = [
     { bucket: "pms5003", field: "aqi", metric_type: "air_quality" },
     { bucket: "pms5003", field: "airQuality", metric_type: "air_quality" },
 ]
+const ESG_COMPONENT_WEIGHTS = {
+    no2: 0.4,
+    noise_levels: 0.2,
+    temperature: 0.2,
+    humidity: 0.2,
+}
+const ESG_COMPONENT_ORDER = ["no2", "noise_levels", "temperature", "humidity"]
+const ESG_SCORE_LOOKBACK_MS = 10 * 60 * 1000
+const ESG_NOISE_BASELINE = 50
+const ESG_NOISE_RANGE = 20
 
 let writeRequestTypePromise
 
@@ -145,6 +161,15 @@ function buildAllowedOrigins(...sources) {
     return [...new Set([...DEFAULT_ALLOWED_WEB_ORIGINS, ...configuredOrigins])]
 }
 
+function isAllowedOrigin(origin, allowedOrigins) {
+    const normalizedOrigin = normalizeOrigin(origin)
+
+    return (
+        allowedOrigins.includes(normalizedOrigin) ||
+        DEFAULT_ALLOWED_WEB_ORIGIN_PATTERNS.some((pattern) => pattern.test(normalizedOrigin))
+    )
+}
+
 function createCorsOptions() {
     const allowedOrigins = buildAllowedOrigins(
         process.env.CORS_ORIGIN,
@@ -164,7 +189,7 @@ function createCorsOptions() {
                 return
             }
 
-            callback(null, allowedOrigins.includes(normalizeOrigin(origin)))
+            callback(null, isAllowedOrigin(origin, allowedOrigins))
         },
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allowedHeaders: ["Content-Type", "Authorization"],
@@ -214,6 +239,28 @@ async function verifyFirebaseUserFromRequest(req) {
 function normalizeKalshiBaseUrl(value) {
     const normalized = String(value || "").trim().replace(/\/+$/, "")
     return normalized || DEFAULT_KALSHI_BASE_URL
+}
+
+function normalizeBaseUrl(value, fallback = "") {
+    const normalized = String(value || "").trim().replace(/\/+$/, "")
+    return normalized || fallback
+}
+
+function normalizeMetricType(value) {
+    return String(value ?? "").trim().toLowerCase()
+}
+
+function isSupportedMetricType(value) {
+    return METRIC_TYPES.includes(normalizeMetricType(value))
+}
+
+function parseFiniteNumber(value) {
+    const numericValue = Number(value)
+    return Number.isFinite(numericValue) ? numericValue : null
+}
+
+function getMetricTypeValidationMessage() {
+    return `metric_type must be one of: ${METRIC_TYPES.join(", ")}`
 }
 
 function getKalshiConfig() {
@@ -562,6 +609,169 @@ function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max)
 }
 
+function clampMax(value, max) {
+    return Math.min(Number(value), max)
+}
+
+function clampMin(value, min) {
+    return Math.max(Number(value), min)
+}
+
+function average(values) {
+    if (!Array.isArray(values) || values.length === 0) {
+        return null
+    }
+
+    return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+function normalizeScoreTimestamp(value) {
+    return Number.isFinite(Number(value))
+        ? Math.trunc(Number(value))
+        : 0
+}
+
+function getLatestSample(samples = []) {
+    return samples.reduce((latest, sample) => {
+        if (!latest) {
+            return sample
+        }
+
+        return normalizeScoreTimestamp(sample?.timestamp) >= normalizeScoreTimestamp(latest?.timestamp)
+            ? sample
+            : latest
+    }, null)
+}
+
+function groupSamplesBy(samples = [], keySelector = () => "") {
+    return samples.reduce((groups, sample) => {
+        const key = String(keySelector(sample) || "").trim()
+
+        if (!key) {
+            return groups
+        }
+
+        const existing = groups.get(key) || []
+        existing.push(sample)
+        groups.set(key, existing)
+        return groups
+    }, new Map())
+}
+
+function getMetricComponentScore(metricType, samples = []) {
+    const latestSample = getLatestSample(samples)
+    const latestValue = Number(latestSample?.value)
+    const numericValues = samples
+        .map((sample) => Number(sample?.value))
+        .filter((value) => Number.isFinite(value))
+
+    if (!Number.isFinite(latestValue) || numericValues.length === 0) {
+        return null
+    }
+
+    let penalty
+
+    switch (metricType) {
+        case "no2":
+            penalty = clampMax((((latestValue - Math.min(...numericValues)) * 3.3 / 4095) / 0.1), 1)
+            break
+        case "noise_levels":
+            penalty = clampMax(clampMin((latestValue - ESG_NOISE_BASELINE) / ESG_NOISE_RANGE, 0), 1)
+            break
+        case "temperature":
+            penalty = clampMax(Math.abs(latestValue - 22.5) / 10, 1)
+            break
+        case "humidity":
+            penalty = clampMax(Math.abs(latestValue - 50) / 30, 1)
+            break
+        default:
+            return null
+    }
+
+    return Number((100 * (1 - penalty)).toFixed(2))
+}
+
+function calculateMetricScoresFromSamples(samples = [], now = Date.now()) {
+    const scoringSamples = samples.filter(
+        (sample) => normalizeScoreTimestamp(sample?.timestamp) >= now - ESG_SCORE_LOOKBACK_MS
+    )
+    const metricBuckets = groupSamplesBy(scoringSamples, (sample) => sample?.metric_type)
+    const metricScores = {}
+
+    ESG_COMPONENT_ORDER.forEach((metricType) => {
+        const score = getMetricComponentScore(metricType, metricBuckets.get(metricType) || [])
+
+        if (Number.isFinite(score)) {
+            metricScores[metricType] = score
+        }
+    })
+
+    return metricScores
+}
+
+function calculateWeightedEsgScore(metricScores = {}) {
+    let weightedTotal = 0
+    let totalWeight = 0
+
+    ESG_COMPONENT_ORDER.forEach((metricType) => {
+        const score = Number(metricScores?.[metricType])
+        const weight = Number(ESG_COMPONENT_WEIGHTS[metricType] || 0)
+
+        if (!Number.isFinite(score) || !Number.isFinite(weight) || weight <= 0) {
+            return
+        }
+
+        weightedTotal += score * weight
+        totalWeight += weight
+    })
+
+    if (totalWeight === 0) {
+        return null
+    }
+
+    return Number((weightedTotal / totalWeight).toFixed(2))
+}
+
+function calculateEsgStateFromSamples(samples = [], now = Date.now()) {
+    const scoringSamples = samples.filter(
+        (sample) => normalizeScoreTimestamp(sample?.timestamp) >= now - ESG_SCORE_LOOKBACK_MS
+    )
+    const sensorBuckets = groupSamplesBy(scoringSamples, (sample) => sample?.sensor_id)
+    const sensorScores = {}
+    const sensorMetricScores = new Map()
+    const metricScoreBuckets = {}
+
+    sensorBuckets.forEach((sensorSamples, sensorId) => {
+        const metricScores = calculateMetricScoresFromSamples(sensorSamples, now)
+        const sensorOverall = calculateWeightedEsgScore(metricScores)
+
+        sensorMetricScores.set(sensorId, metricScores)
+
+        Object.entries(metricScores).forEach(([metricType, score]) => {
+            metricScoreBuckets[metricType] = metricScoreBuckets[metricType] || []
+            metricScoreBuckets[metricType].push(score)
+        })
+
+        if (Number.isFinite(sensorOverall)) {
+            sensorScores[sensorId] = sensorOverall
+        }
+    })
+
+    const metricScores = Object.fromEntries(
+        Object.entries(metricScoreBuckets)
+            .map(([metricType, scores]) => [metricType, Number(average(scores).toFixed(2))])
+    )
+    const overallAverage = average(Object.values(sensorScores))
+
+    return {
+        scoringSamples,
+        sensorMetricScores,
+        sensorScores,
+        metricScores,
+        overall: Number.isFinite(overallAverage) ? Number(overallAverage.toFixed(2)) : null,
+    }
+}
+
 function getByPath(payload, dotPath) {
     if (!dotPath) {
         return payload
@@ -767,19 +977,38 @@ function joinFirebasePath(...segments) {
         .join("/")
 }
 
+function buildFirebaseOwnerDevicesPath(deviceRootPath, ownerUid) {
+    return joinFirebasePath(deviceRootPath, ownerUid, FIREBASE_USER_DEVICES_PATH_SEGMENT)
+}
+
+function buildFirebaseDevicePath(deviceRootPath, ownerUid, deviceId) {
+    return joinFirebasePath(
+        deviceRootPath,
+        ownerUid,
+        FIREBASE_USER_DEVICES_PATH_SEGMENT,
+        deviceId
+    )
+}
+
 function normalizeFirebaseTimestamp(rawTimestamp, fallbackTimestamp = Date.now()) {
     const numeric = Number(rawTimestamp)
 
-    if (!Number.isFinite(numeric) || numeric <= 0) {
-        return Math.trunc(fallbackTimestamp)
+    if (Number.isFinite(numeric) && numeric > 0) {
+        if (numeric >= FIREBASE_TIMESTAMP_MIN_MS) {
+            return Math.trunc(numeric)
+        }
+
+        if (numeric >= FIREBASE_TIMESTAMP_MIN_SECONDS) {
+            return Math.trunc(numeric * 1000)
+        }
     }
 
-    if (numeric >= FIREBASE_TIMESTAMP_MIN_MS) {
-        return Math.trunc(numeric)
-    }
+    if (typeof rawTimestamp === "string" && rawTimestamp.trim() !== "") {
+        const parsed = Date.parse(rawTimestamp)
 
-    if (numeric >= FIREBASE_TIMESTAMP_MIN_SECONDS) {
-        return Math.trunc(numeric * 1000)
+        if (!Number.isNaN(parsed)) {
+            return Math.trunc(parsed)
+        }
     }
 
     return Math.trunc(fallbackTimestamp)
@@ -788,6 +1017,8 @@ function normalizeFirebaseTimestamp(rawTimestamp, fallbackTimestamp = Date.now()
 function normalizeFirebaseDevicePayload(deviceId, payload, now = Date.now()) {
     const defaultSensorId = String(
         deviceId
+        || payload?.latest?.deviceId
+        || payload?.deviceId
         || payload?.sht30?.latest?.deviceId
         || payload?.no2?.latest?.deviceId
         || payload?.sound?.latest?.deviceId
@@ -825,6 +1056,64 @@ function normalizeFirebaseDevicePayload(deviceId, payload, now = Date.now()) {
                 latest.updatedAtMs ?? latest.timestamp ?? latest.recordedAt,
                 now
             ),
+        })
+    })
+
+    if (samples.length > 0) {
+        return samples
+    }
+
+    const flatSource = payload?.latest && typeof payload.latest === "object"
+        ? payload.latest
+        : payload
+    const fallbackSensorId = String(defaultSensorId || "").trim()
+
+    if (!flatSource || typeof flatSource !== "object" || !fallbackSensorId) {
+        return samples
+    }
+
+    const fallbackTimestamp = normalizeFirebaseTimestamp(
+        flatSource.updatedAtMs
+        ?? flatSource.updatedAt
+        ?? flatSource.timestamp
+        ?? flatSource.recordedAt
+        ?? payload?.updatedAtMs
+        ?? payload?.updatedAt
+        ?? payload?.timestamp
+        ?? payload?.recordedAt,
+        now
+    )
+    const fallbackMappings = [
+        { metric_type: "temperature", value: flatSource.temperatureC ?? payload?.temperatureC },
+        { metric_type: "humidity", value: flatSource.humidityPct ?? payload?.humidityPct },
+        { metric_type: "no2", value: flatSource.no2Raw ?? payload?.no2Raw },
+        { metric_type: "noise_levels", value: flatSource.soundRaw ?? payload?.soundRaw },
+        {
+            metric_type: "air_quality",
+            value:
+                flatSource.airQuality
+                ?? payload?.airQuality
+                ?? flatSource.particulateMatterLevel
+                ?? payload?.particulateMatterLevel,
+        },
+    ]
+
+    fallbackMappings.forEach((mapping) => {
+        if (mapping.value === null || mapping.value === undefined || mapping.value === "") {
+            return
+        }
+
+        const numericValue = Number(mapping.value)
+
+        if (!Number.isFinite(numericValue)) {
+            return
+        }
+
+        samples.push({
+            sensor_id: fallbackSensorId,
+            metric_type: mapping.metric_type,
+            value: numericValue,
+            timestamp: fallbackTimestamp,
         })
     })
 
@@ -876,10 +1165,48 @@ function normalizeDeviceOwnerLabels(metadata = {}) {
     }
 }
 
+function normalizeMwbeUserRecord(userRecord = {}) {
+    return {
+        id: String(userRecord.id || "").trim(),
+        email: String(userRecord.email || "").trim(),
+        name: String(userRecord.name || "").trim(),
+        firebase_uid: String(
+            userRecord.firebase_uid
+            || userRecord.firebaseUid
+            || ""
+        ).trim(),
+    }
+}
+
+function extractFirebaseAuthToken(request = {}) {
+    const authorizationHeader = String(
+        request.headers?.authorization
+        || request.get?.("Authorization")
+        || ""
+    ).trim()
+    const bearerMatch = authorizationHeader.match(/^Bearer\s+(.+)$/i)
+
+    if (bearerMatch?.[1]) {
+        return String(bearerMatch[1]).trim()
+    }
+
+    return String(
+        request.body?.firebaseIdToken
+        || request.query?.firebaseIdToken
+        || ""
+    ).trim()
+}
+
 function createApp(options = {}) {
     const firebaseDb = options.firebaseDb === undefined ? db : options.firebaseDb
     const supabase = options.supabase === undefined ? createSupabaseFromEnv() : options.supabase
     const kalshiHttpClient = options.kalshiHttpClient || axios
+    const mwbeHttpClient = options.mwbeHttpClient || axios
+    const firebaseHttpClient = options.firebaseHttpClient || axios
+    const legacyIotDataResponse = options.legacyIotDataResponse === true
+    const pushMetrics = typeof options.pushMetricsToGrafana === "function"
+        ? options.pushMetricsToGrafana
+        : pushMetricsToGrafana
     const app = express()
     const registry = new promClient.Registry()
     const state = {
@@ -1042,6 +1369,7 @@ function createApp(options = {}) {
                 process.env.FIREBASE_DEVICE_ROOT_PATH || DEFAULT_FIREBASE_DEVICE_ROOT_PATH
             ).replace(/^\/+|\/+$/g, ""),
             source: String(process.env.FIREBASE_SOURCE_NAME || "firebase-rtdb"),
+            accessMode: firebaseDb ? "admin-sdk" : "rest-fallback",
             backgroundPollingEnabled: parseBoolean(
                 process.env.FIREBASE_BACKGROUND_POLLING_ENABLED,
                 false
@@ -1415,6 +1743,7 @@ function createApp(options = {}) {
 
     function updateEsgState(samples) {
         const config = getEsgConfig()
+        const computedAt = Date.now()
 
         samples.forEach((sample) => {
             state.sampleBuffer.push(sample)
@@ -1427,14 +1756,20 @@ function createApp(options = {}) {
 
         const bufferedSamples = config.mode === "streaming"
             ? Object.values(state.latestSeries)
-            : state.sampleBuffer.filter((sample) => sample.timestamp >= Date.now() - config.windowMs)
+            : state.sampleBuffer.filter((sample) => sample.timestamp >= computedAt - config.windowMs)
+        const scoringSamples = bufferedSamples.filter(
+            (sample) => normalizeSampleTimestamp(sample.timestamp) >= computedAt - ESG_SCORE_LOOKBACK_MS
+        )
 
         esgBufferSizeMetric.set(bufferedSamples.length)
+        esgMetricScoreMetric.reset()
+        esgSensorScoreMetric.reset()
+        esgEnvironmentScoreMetric.reset()
 
-        if (bufferedSamples.length === 0) {
+        if (scoringSamples.length === 0) {
             state.lastEsgScore = {
                 mode: config.mode,
-                computedAt: Date.now(),
+                computedAt,
                 overall: null,
                 sampleCount: 0,
                 metricScores: {},
@@ -1443,64 +1778,40 @@ function createApp(options = {}) {
             return
         }
 
-        const metricBuckets = {}
-        const sensorBuckets = {}
+        const {
+            metricScores,
+            overall,
+            sensorScores,
+        } = calculateEsgStateFromSamples(bufferedSamples, computedAt)
         const sensorLabels = {}
 
-        bufferedSamples.forEach((sample) => {
-            metricBuckets[sample.metric_type] = metricBuckets[sample.metric_type] || []
-            metricBuckets[sample.metric_type].push(sample.esg_score)
-
-            sensorBuckets[sample.sensor_id] = sensorBuckets[sample.sensor_id] || []
-            sensorBuckets[sample.sensor_id].push(sample.esg_score)
-
+        scoringSamples.forEach((sample) => {
             sensorLabels[sample.sensor_id] = normalizeDeviceOwnerLabels(sample)
         })
 
-        const metricScores = {}
-        let weightedTotal = 0
-        let totalWeight = 0
-
-        Object.keys(metricBuckets).forEach((metricType) => {
-            const scores = metricBuckets[metricType]
-            const average = scores.reduce((sum, value) => sum + value, 0) / scores.length
-            const rounded = Number(average.toFixed(2))
-            const weight = Number(config.weights?.[metricType] ?? 1)
-
-            metricScores[metricType] = rounded
-            weightedTotal += rounded * weight
-            totalWeight += weight
-            esgMetricScoreMetric.set({ metric_type: metricType }, rounded)
+        Object.entries(metricScores).forEach(([metricType, score]) => {
+            esgMetricScoreMetric.set({ metric_type: metricType }, score)
         })
 
-        const sensorScores = {}
-        Object.keys(sensorBuckets).forEach((sensorId) => {
-            const scores = sensorBuckets[sensorId]
-            const average = scores.reduce((sum, value) => sum + value, 0) / scores.length
-            const rounded = Number(average.toFixed(2))
-            sensorScores[sensorId] = rounded
+        Object.entries(sensorScores).forEach(([sensorId, sensorScore]) => {
             esgSensorScoreMetric.set(
                 {
                     sensor_id: sensorId,
                     ...normalizeDeviceOwnerLabels(sensorLabels[sensorId]),
                 },
-                rounded
+                sensorScore
             )
         })
 
-        const overall = totalWeight > 0
-            ? Number((weightedTotal / totalWeight).toFixed(2))
-            : null
-
-        if (overall !== null) {
+        if (Number.isFinite(overall)) {
             esgEnvironmentScoreMetric.set({ scope: "overall" }, overall)
         }
 
         state.lastEsgScore = {
             mode: config.mode,
-            computedAt: Date.now(),
+            computedAt,
             overall,
-            sampleCount: bufferedSamples.length,
+            sampleCount: scoringSamples.length,
             metricScores,
             sensorScores,
         }
@@ -1636,65 +1947,69 @@ function createApp(options = {}) {
 
         const metadataBySensorId = new Map()
 
-        const { data: devices, error: devicesError } = await supabase
-            .from("devices")
-            .select("device_id, owner_uid, name")
-            .in("device_id", uniqueSensorIds)
+        try {
+            const { data: devices, error: devicesError } = await supabase
+                .from("devices")
+                .select("device_id, owner_uid, name")
+                .in("device_id", uniqueSensorIds)
 
-        if (devicesError) {
-            console.warn(`Failed to load device owner metadata: ${devicesError.message}`)
-            return metadataBySensorId
-        }
-
-        const ownerKeys = [...new Set((devices || []).map((device) => device.owner_uid).filter(Boolean))]
-        const ownersByKey = new Map()
-
-        const ownerUuidKeys = ownerKeys.filter(isUuid)
-        if (ownerUuidKeys.length > 0) {
-            const { data: ownersById, error: ownersByIdError } = await supabase
-                .from("users")
-                .select("id, email, firebase_uid")
-                .in("id", ownerUuidKeys)
-
-            if (ownersByIdError) {
-                console.warn(`Failed to load owner metadata by user id: ${ownersByIdError.message}`)
-            } else {
-                ;(ownersById || []).forEach((owner) => {
-                    ownersByKey.set(owner.id, owner)
-                    if (owner.firebase_uid) {
-                        ownersByKey.set(owner.firebase_uid, owner)
-                    }
-                })
+            if (devicesError) {
+                console.warn(`Failed to load device owner metadata: ${devicesError.message}`)
+                return metadataBySensorId
             }
-        }
 
-        const ownerFirebaseUidKeys = ownerKeys.filter((ownerKey) => !isUuid(ownerKey))
-        if (ownerFirebaseUidKeys.length > 0) {
-            const { data: ownersByFirebaseUid, error: ownersByFirebaseUidError } = await supabase
-                .from("users")
-                .select("id, email, firebase_uid")
-                .in("firebase_uid", ownerFirebaseUidKeys)
+            const ownerKeys = [...new Set((devices || []).map((device) => device.owner_uid).filter(Boolean))]
+            const ownersByKey = new Map()
 
-            if (ownersByFirebaseUidError) {
-                console.warn(`Failed to load owner metadata by firebase uid: ${ownersByFirebaseUidError.message}`)
-            } else {
-                ;(ownersByFirebaseUid || []).forEach((owner) => {
-                    ownersByKey.set(owner.id, owner)
-                    if (owner.firebase_uid) {
-                        ownersByKey.set(owner.firebase_uid, owner)
-                    }
-                })
+            const ownerUuidKeys = ownerKeys.filter(isUuid)
+            if (ownerUuidKeys.length > 0) {
+                const { data: ownersById, error: ownersByIdError } = await supabase
+                    .from("users")
+                    .select("id, email, firebase_uid")
+                    .in("id", ownerUuidKeys)
+
+                if (ownersByIdError) {
+                    console.warn(`Failed to load owner metadata by user id: ${ownersByIdError.message}`)
+                } else {
+                    ;(ownersById || []).forEach((owner) => {
+                        ownersByKey.set(owner.id, owner)
+                        if (owner.firebase_uid) {
+                            ownersByKey.set(owner.firebase_uid, owner)
+                        }
+                    })
+                }
             }
-        }
 
-        ;(devices || []).forEach((device) => {
-            const owner = ownersByKey.get(device.owner_uid)
-            metadataBySensorId.set(device.device_id, normalizeDeviceOwnerLabels({
-                owner_uid: owner?.firebase_uid || device.owner_uid || DEFAULT_DEVICE_OWNER_LABELS.owner_uid,
-                owner_email: owner?.email || DEFAULT_DEVICE_OWNER_LABELS.owner_email,
-                device_name: device.name || device.device_id || DEFAULT_DEVICE_OWNER_LABELS.device_name,
-            }))
-        })
+            const ownerFirebaseUidKeys = ownerKeys.filter((ownerKey) => !isUuid(ownerKey))
+            if (ownerFirebaseUidKeys.length > 0) {
+                const { data: ownersByFirebaseUid, error: ownersByFirebaseUidError } = await supabase
+                    .from("users")
+                    .select("id, email, firebase_uid")
+                    .in("firebase_uid", ownerFirebaseUidKeys)
+
+                if (ownersByFirebaseUidError) {
+                    console.warn(`Failed to load owner metadata by firebase uid: ${ownersByFirebaseUidError.message}`)
+                } else {
+                    ;(ownersByFirebaseUid || []).forEach((owner) => {
+                        ownersByKey.set(owner.id, owner)
+                        if (owner.firebase_uid) {
+                            ownersByKey.set(owner.firebase_uid, owner)
+                        }
+                    })
+                }
+            }
+
+            ;(devices || []).forEach((device) => {
+                const owner = ownersByKey.get(device.owner_uid)
+                metadataBySensorId.set(device.device_id, normalizeDeviceOwnerLabels({
+                    owner_uid: owner?.firebase_uid || device.owner_uid || DEFAULT_DEVICE_OWNER_LABELS.owner_uid,
+                    owner_email: owner?.email || DEFAULT_DEVICE_OWNER_LABELS.owner_email,
+                    device_name: device.name || device.device_id || DEFAULT_DEVICE_OWNER_LABELS.device_name,
+                }))
+            })
+        } catch (error) {
+            console.warn(`Failed to load device owner metadata: ${error.message}`)
+        }
 
         return metadataBySensorId
     }
@@ -1710,10 +2025,11 @@ function createApp(options = {}) {
             value: sample.value,
             recorded_at: new Date(normalizeSampleTimestamp(sample.timestamp)).toISOString(),
         }))
+        const insertPayload = rows.length === 1 ? rows[0] : rows
 
         const { error } = await supabase
             .from("sensor_readings")
-            .insert(rows)
+            .insert(insertPayload)
 
         if (error) {
             throw new Error(error.message)
@@ -1780,8 +2096,8 @@ function createApp(options = {}) {
         )
 
         samples.forEach((sample, index) => {
-            const metricType = String(sample.metric_type ?? "").toLowerCase()
-            const numericValue = Number(sample.value)
+            const metricType = normalizeMetricType(sample.metric_type)
+            const numericValue = parseFiniteNumber(sample.value)
             const sensorId = String(sample.sensor_id || "")
             const ownerMetadata = normalizeDeviceOwnerLabels({
                 ...ownerMetadataBySensorId.get(sensorId),
@@ -1790,7 +2106,7 @@ function createApp(options = {}) {
                 device_name: sample.device_name || ownerMetadataBySensorId.get(sensorId)?.device_name || sensorId,
             })
 
-            if (!sample.sensor_id || !METRIC_TYPES.includes(metricType) || !Number.isFinite(numericValue)) {
+            if (!sample.sensor_id || !isSupportedMetricType(metricType) || numericValue === null) {
                 rejected.push({
                     index,
                     sample,
@@ -1820,7 +2136,7 @@ function createApp(options = {}) {
             } catch (error) {
                 console.warn(`Sensor reading persistence failed: ${error.message}`)
             }
-            pushResult = await pushMetricsToGrafana(buildDynamicTimeSeries(accepted))
+            pushResult = await pushMetrics(buildDynamicTimeSeries(accepted))
         }
 
         return { accepted, rejected, pushResult }
@@ -1834,7 +2150,7 @@ function createApp(options = {}) {
         }
 
         const requestedSensorId = String(options.sensor_id || "").trim()
-        const requestedMetricType = String(options.metric_type || "").trim().toLowerCase()
+        const requestedMetricType = normalizeMetricType(options.metric_type)
 
         return state.sampleBuffer
             .filter((sample) => Number(sample.timestamp) >= selectedWindow.sinceMs)
@@ -1927,8 +2243,27 @@ function createApp(options = {}) {
     }
 
     function getMwbeConfig() {
+        const configuredBaseUrl = String(
+            process.env.MWBE_API_BASE_URL
+            || process.env.VITE_MWBE_API_BASE_URL
+            || ""
+        ).trim()
+        const fallbackBaseUrl = configuredBaseUrl
+            || (
+                String(process.env.MWBE_API_URL || "").trim()
+                    ? (() => {
+                        try {
+                            return new URL(String(process.env.MWBE_API_URL).trim()).origin
+                        } catch {
+                            return ""
+                        }
+                    })()
+                    : ""
+            )
+
         return {
             url: process.env.MWBE_API_URL || "",
+            baseUrl: normalizeBaseUrl(fallbackBaseUrl, DEFAULT_MWBE_API_BASE_URL),
             method: String(process.env.MWBE_API_METHOD || "GET").toUpperCase(),
             timeoutMs: Number(process.env.MWBE_API_TIMEOUT_MS || 10000),
             headers: parseJsonEnv(process.env.MWBE_API_HEADERS_JSON, {}),
@@ -2204,7 +2539,7 @@ function createApp(options = {}) {
         }
     }
 
-    async function readFirebaseValue(pathToRead) {
+    async function readFirebaseValue(pathToRead, options = {}) {
         if (firebaseDb) {
             const snapshot = await firebaseDb.ref(pathToRead).once("value")
             return snapshot.val()
@@ -2216,22 +2551,89 @@ function createApp(options = {}) {
             throw new Error("Firebase database URL is not configured")
         }
 
-        const response = await axios.get(
-            `${config.databaseUrl}/${pathToRead}.json`,
-            {
-                timeout: 10000,
-                validateStatus: (status) => status >= 200 && status < 300,
-            }
-        )
+        const authToken = String(options.authToken || "").trim()
+        const response = await firebaseHttpClient({
+            method: "GET",
+            url: `${config.databaseUrl}/${pathToRead}.json`,
+            params: authToken ? { auth: authToken } : {},
+            headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+            timeout: 10000,
+            validateStatus: (status) => status >= 200 && status < 300,
+        })
 
         return response.data
+    }
+
+    async function callMwbeApi({ endpointPath, method = "GET", params = {} }) {
+        const config = getMwbeConfig()
+        const baseUrl = normalizeBaseUrl(config.baseUrl, DEFAULT_MWBE_API_BASE_URL)
+
+        if (!baseUrl) {
+            throw new Error("MWBE API base URL is not configured")
+        }
+
+        const url = new URL(
+            String(endpointPath || "").startsWith("/")
+                ? `${baseUrl}${endpointPath}`
+                : `${baseUrl}/${String(endpointPath || "").replace(/^\/+/, "")}`
+        )
+        const response = await mwbeHttpClient({
+            method,
+            url: url.toString(),
+            params,
+            timeout: config.timeoutMs,
+            validateStatus: (status) => status >= 200 && status < 300,
+        })
+
+        return response.data
+    }
+
+    async function loadOwnerRecordFromMwbe(ownerUid) {
+        const normalizedOwnerUid = String(ownerUid || "").trim()
+
+        if (!normalizedOwnerUid) {
+            return null
+        }
+
+        const payload = await callMwbeApi({
+            endpointPath: "/users",
+        })
+        const users = Array.isArray(payload?.users) ? payload.users : []
+        const matchedUser = users
+            .map((user) => normalizeMwbeUserRecord(user))
+            .find((user) => user.id === normalizedOwnerUid || user.firebase_uid === normalizedOwnerUid)
+
+        return matchedUser || null
+    }
+
+    async function loadOwnedFirebaseDeviceIdsFromMwbe(ownerUid) {
+        const normalizedOwnerUid = String(ownerUid || "").trim()
+
+        if (!normalizedOwnerUid) {
+            return []
+        }
+
+        const payload = await callMwbeApi({
+            endpointPath: "/devices/owned",
+            params: { ownerUid: normalizedOwnerUid },
+        })
+
+        return [...new Set(
+            (Array.isArray(payload?.devices) ? payload.devices : [])
+                .map((device) => String(device?.deviceId || "").trim())
+                .filter(Boolean)
+        )]
     }
 
     async function loadOwnerRecord(ownerUid) {
         const normalizedOwnerUid = String(ownerUid || "").trim()
 
-        if (!normalizedOwnerUid || !supabase) {
+        if (!normalizedOwnerUid) {
             return null
+        }
+
+        if (!supabase) {
+            return loadOwnerRecordFromMwbe(normalizedOwnerUid)
         }
 
         const ownerQuery = supabase
@@ -2243,10 +2645,30 @@ function createApp(options = {}) {
             : await ownerQuery.eq("firebase_uid", normalizedOwnerUid).maybeSingle()
 
         if (error) {
-            throw new Error(`Failed to load owner user ${normalizedOwnerUid}: ${error.message}`)
+            console.warn(`Failed to load owner user ${normalizedOwnerUid} from Supabase: ${error.message}`)
+            return loadOwnerRecordFromMwbe(normalizedOwnerUid)
         }
 
-        return data || null
+        if (data) {
+            return data
+        }
+
+        return loadOwnerRecordFromMwbe(normalizedOwnerUid)
+    }
+
+    async function resolveFirebaseOwnerUid(ownerUid) {
+        const normalizedOwnerUid = String(ownerUid || "").trim()
+
+        if (!normalizedOwnerUid) {
+            return ""
+        }
+
+        if (!isUuid(normalizedOwnerUid)) {
+            return normalizedOwnerUid
+        }
+
+        const owner = await loadOwnerRecord(normalizedOwnerUid)
+        return String(owner?.firebase_uid || normalizedOwnerUid).trim()
     }
 
     async function loadOwnedFirebaseDeviceIds(ownerUid) {
@@ -2257,7 +2679,7 @@ function createApp(options = {}) {
         }
 
         if (!supabase) {
-            throw new Error("Supabase is not configured")
+            return loadOwnedFirebaseDeviceIdsFromMwbe(normalizedOwnerUid)
         }
 
         const owner = await loadOwnerRecord(normalizedOwnerUid)
@@ -2273,14 +2695,21 @@ function createApp(options = {}) {
             .in("owner_uid", ownerKeys)
 
         if (error) {
-            throw new Error(`Failed to load devices for owner ${normalizedOwnerUid}: ${error.message}`)
+            console.warn(`Failed to load devices for owner ${normalizedOwnerUid} from Supabase: ${error.message}`)
+            return loadOwnedFirebaseDeviceIdsFromMwbe(owner?.firebase_uid || normalizedOwnerUid)
         }
 
-        return [...new Set(
+        const deviceIds = [...new Set(
             (data || [])
                 .map((device) => String(device?.device_id || "").trim())
                 .filter(Boolean)
         )]
+
+        if (deviceIds.length > 0) {
+            return deviceIds
+        }
+
+        return loadOwnedFirebaseDeviceIdsFromMwbe(owner?.firebase_uid || normalizedOwnerUid)
     }
 
     async function loadKnownFirebaseDeviceIds() {
@@ -2310,6 +2739,157 @@ function createApp(options = {}) {
                 .map((device) => String(device?.device_id || "").trim())
                 .filter(Boolean)
         )]
+    }
+
+    function normalizeFirebaseRootEntries(rootPayload, config) {
+        if (!rootPayload || typeof rootPayload !== "object") {
+            return []
+        }
+
+        return Object.entries(rootPayload).flatMap(([ownerUid, ownerPayload]) => {
+            const normalizedOwnerUid = String(ownerUid || "").trim()
+            const devicesPayload = ownerPayload?.[FIREBASE_USER_DEVICES_PATH_SEGMENT]
+
+            if (!normalizedOwnerUid || !devicesPayload || typeof devicesPayload !== "object") {
+                return []
+            }
+
+            return Object.entries(devicesPayload)
+                .map(([deviceId, payload]) => {
+                    const normalizedDeviceId = String(deviceId || "").trim()
+
+                    if (!normalizedDeviceId) {
+                        return null
+                    }
+
+                    return {
+                        deviceId: normalizedDeviceId,
+                        ownerUid: normalizedOwnerUid,
+                        path: buildFirebaseDevicePath(
+                            config.deviceRootPath,
+                            normalizedOwnerUid,
+                            normalizedDeviceId
+                        ),
+                        payload,
+                    }
+                })
+                .filter(Boolean)
+        })
+    }
+
+    async function readFirebaseRootEntries(config, options = {}) {
+        const rootPayload = await readFirebaseValue(config.deviceRootPath, options)
+        return normalizeFirebaseRootEntries(rootPayload, config)
+    }
+
+    async function loadFirebaseDeviceEntriesByIds(deviceIds, config, options = {}) {
+        const fallbackOwnerUid = String(options.ownerUid || "").trim()
+        const uniqueDeviceIds = [...new Set(
+            (deviceIds || [])
+                .map((deviceId) => String(deviceId || "").trim())
+                .filter(Boolean)
+        )]
+
+        if (uniqueDeviceIds.length === 0) {
+            return []
+        }
+
+        const ownerMetadataByDeviceId = await loadDeviceOwnerMetadataMap(uniqueDeviceIds)
+        const resolvedEntriesByDeviceId = new Map()
+        const unresolvedDeviceIds = []
+
+        const directPathLookups = await Promise.all(uniqueDeviceIds.map(async (deviceId) => {
+            const metadata = ownerMetadataByDeviceId.get(deviceId)
+            const ownerUidCandidate = String(
+                metadata?.owner_uid
+                || fallbackOwnerUid
+                || ""
+            ).trim()
+
+            if (!ownerUidCandidate || ownerUidCandidate === DEFAULT_DEVICE_OWNER_LABELS.owner_uid) {
+                return {
+                    deviceId,
+                    ownerUid: "",
+                    path: "",
+                    payload: null,
+                }
+            }
+
+            const resolvedOwnerUid = await resolveFirebaseOwnerUid(ownerUidCandidate)
+            const pathToRead = buildFirebaseDevicePath(
+                config.deviceRootPath,
+                resolvedOwnerUid,
+                deviceId
+            )
+
+            try {
+                return {
+                    deviceId,
+                    ownerUid: resolvedOwnerUid,
+                    path: pathToRead,
+                    payload: await readFirebaseValue(pathToRead, {
+                        authToken: options.authToken,
+                    }),
+                }
+            } catch (error) {
+                return {
+                    deviceId,
+                    ownerUid: resolvedOwnerUid,
+                    path: pathToRead,
+                    payload: null,
+                    error,
+                }
+            }
+        }))
+
+        directPathLookups.forEach((entry) => {
+            if (entry?.payload) {
+                resolvedEntriesByDeviceId.set(entry.deviceId, entry)
+                return
+            }
+
+            unresolvedDeviceIds.push(entry.deviceId)
+        })
+
+        if (unresolvedDeviceIds.length === 0 || options.allowRootScan === false) {
+            return uniqueDeviceIds
+                .map((deviceId) => resolvedEntriesByDeviceId.get(deviceId))
+                .filter(Boolean)
+        }
+
+        let rootEntries = []
+
+        try {
+            rootEntries = await readFirebaseRootEntries(config, {
+                authToken: options.authToken,
+            })
+        } catch (error) {
+            if (
+                resolvedEntriesByDeviceId.size > 0
+                && isFirebasePermissionError(error)
+            ) {
+                return uniqueDeviceIds
+                    .map((deviceId) => resolvedEntriesByDeviceId.get(deviceId))
+                    .filter(Boolean)
+            }
+
+            throw error
+        }
+        const rootEntriesByDeviceId = new Map(
+            rootEntries.map((entry) => [entry.deviceId, entry])
+        )
+
+        unresolvedDeviceIds.forEach((deviceId) => {
+            const rootEntry = rootEntriesByDeviceId.get(deviceId)
+
+            if (rootEntry) {
+                resolvedEntriesByDeviceId.set(deviceId, rootEntry)
+            }
+        })
+
+        return uniqueDeviceIds
+            .map((deviceId) => resolvedEntriesByDeviceId.get(deviceId))
+            .filter(Boolean)
     }
 
     function filterChangedFirebaseSamples(samples, source) {
@@ -2345,17 +2925,10 @@ function createApp(options = {}) {
                 .map((deviceId) => String(deviceId || "").trim())
                 .filter(Boolean)
         )]
-
-        const devicePayloads = await Promise.all(
-            uniqueDeviceIds.map(async (deviceId) => ({
-                deviceId,
-                path: joinFirebasePath(config.deviceRootPath, deviceId),
-                payload: await readFirebaseValue(joinFirebasePath(config.deviceRootPath, deviceId)),
-            }))
-        )
-
+        const devicePayloads = await loadFirebaseDeviceEntriesByIds(deviceIds, config, options)
         const normalizedDevices = devicePayloads.map((devicePayload) => ({
             deviceId: devicePayload.deviceId,
+            ownerUid: devicePayload.ownerUid,
             path: devicePayload.path,
             samples: devicePayload.payload
                 ? normalizeFirebaseDevicePayload(devicePayload.deviceId, devicePayload.payload, now)
@@ -2389,13 +2962,13 @@ function createApp(options = {}) {
         state.lastFirebaseError = null
         state.lastFirebaseSamples = result.accepted
         state.lastFirebaseSync = {
-            ownerUid: options.ownerUid || null,
-            deviceCount: normalizedDevices.length,
+                ownerUid: options.ownerUid || null,
+                deviceCount: normalizedDevices.length,
             accepted: result.accepted.length,
             rejected: result.rejected.length,
-            path: options.path || config.deviceRootPath,
-            source: config.source,
-            syncedAt: Date.now(),
+                path: options.path || config.deviceRootPath,
+                source: config.source,
+                syncedAt: Date.now(),
             pushResult: result.pushResult,
             skippedUnchanged,
         }
@@ -2428,23 +3001,27 @@ function createApp(options = {}) {
         const requestedDeviceId = String(options.deviceId || "").trim()
 
         if (requestedOwnerUid) {
+            const resolvedOwnerUid = await resolveFirebaseOwnerUid(requestedOwnerUid)
             const ownedDeviceIds = await loadOwnedFirebaseDeviceIds(requestedOwnerUid)
             return syncFirebaseDevicesByIds(ownedDeviceIds, config, {
-                ownerUid: requestedOwnerUid,
-                path: joinFirebasePath(config.deviceRootPath, `{owner:${requestedOwnerUid}}`),
+                authToken: options.authToken,
+                ownerUid: resolvedOwnerUid,
+                path: buildFirebaseOwnerDevicesPath(config.deviceRootPath, resolvedOwnerUid || requestedOwnerUid),
             })
         }
 
         if (requestedDeviceId) {
             return syncFirebaseDevicesByIds([requestedDeviceId], config, {
-                path: joinFirebasePath(config.deviceRootPath, requestedDeviceId),
+                authToken: options.authToken,
+                path: buildFirebaseDevicePath(config.deviceRootPath, "{owner}", requestedDeviceId),
             })
         }
 
         const knownDeviceIds = await loadKnownFirebaseDeviceIds()
         if (knownDeviceIds.length > 0) {
             return syncFirebaseDevicesByIds(knownDeviceIds, config, {
-                path: joinFirebasePath(config.deviceRootPath, "{known_devices}"),
+                authToken: options.authToken,
+                path: joinFirebasePath(config.deviceRootPath, "{known_owners}", FIREBASE_USER_DEVICES_PATH_SEGMENT),
             })
         }
 
@@ -2452,13 +3029,15 @@ function createApp(options = {}) {
         let devices
 
         try {
-            devices = await readFirebaseValue(pathToRead)
+            devices = await readFirebaseValue(pathToRead, {
+                authToken: options.authToken,
+            })
         } catch (error) {
             if (!isFirebasePermissionError(error)) {
                 throw error
             }
 
-            state.lastFirebaseError = "Firebase devices root is denied and no known device list is configured"
+            state.lastFirebaseError = "Firebase users root is denied and no known device list is configured"
             state.lastFirebaseSamples = []
             state.lastFirebaseSync = {
                 deviceCount: 0,
@@ -2488,9 +3067,11 @@ function createApp(options = {}) {
             throw new Error(`No Firebase data found at ${pathToRead}`)
         }
 
-        const normalizedDevices = Object.entries(devices).map(([entryDeviceId, payload]) => ({
-            deviceId: entryDeviceId,
-            samples: normalizeFirebaseDevicePayload(entryDeviceId, payload, now),
+        const normalizedDevices = normalizeFirebaseRootEntries(devices, config).map((entry) => ({
+            deviceId: entry.deviceId,
+            ownerUid: entry.ownerUid,
+            path: entry.path,
+            samples: normalizeFirebaseDevicePayload(entry.deviceId, entry.payload, now),
         }))
 
         const samples = normalizedDevices.flatMap((device) => device.samples)
@@ -2537,11 +3118,27 @@ function createApp(options = {}) {
             ...state.lastFirebaseSync,
             devices: normalizedDevices.map((device) => ({
                 deviceId: device.deviceId,
+                path: device.path,
                 sampleCount: device.samples.length,
             })),
             samples: result.accepted,
             rejectedSamples: result.rejected,
             pushResult: result.pushResult,
+        }
+    }
+
+    async function respondWithFirebaseSync(res, syncOptions) {
+        try {
+            const result = await syncFirebaseData(syncOptions)
+
+            res.json({
+                status: "success",
+                ...result,
+            })
+        } catch (error) {
+            state.lastFirebaseError = error.message
+            console.error(error.message)
+            res.status(Number(error.statusCode) || 500).json({ error: "Failed to sync Firebase data", detail: error.message })
         }
     }
 
@@ -2644,6 +3241,7 @@ function createApp(options = {}) {
 
     app.get("/data", async (req, res) => {
         const config = getFirebaseConfig()
+        const authToken = extractFirebaseAuthToken(req)
 
         if (!firebaseDb && !config.databaseUrl) {
             res.status(503).json({ error: "Firebase is disabled" })
@@ -2652,10 +3250,20 @@ function createApp(options = {}) {
 
         const explicitPath = String(req.query.path || "").trim()
         const requestedDeviceId = String(req.query.deviceId || "").trim()
+        const deviceEntries = explicitPath || !requestedDeviceId
+            ? []
+            : await loadFirebaseDeviceEntriesByIds([requestedDeviceId], config, { authToken })
         const pathToRead = explicitPath
-            || (requestedDeviceId ? joinFirebasePath(config.deviceRootPath, requestedDeviceId) : config.deviceRootPath)
+            || deviceEntries[0]?.path
+            || (requestedDeviceId
+                ? buildFirebaseDevicePath(config.deviceRootPath, "{owner}", requestedDeviceId)
+                : config.deviceRootPath)
 
-        const payload = await readFirebaseValue(pathToRead)
+        const payload = explicitPath || !requestedDeviceId
+            ? await readFirebaseValue(pathToRead, {
+                authToken,
+            })
+            : deviceEntries[0]?.payload || null
         res.json(payload)
     })
 
@@ -2666,11 +3274,11 @@ function createApp(options = {}) {
 
     app.get("/iot/export/:range", async (req, res) => {
         try {
-            const metricType = String(req.query.metric_type || "").trim().toLowerCase()
+            const metricType = normalizeMetricType(req.query.metric_type)
 
-            if (metricType && !METRIC_TYPES.includes(metricType)) {
+            if (metricType && !isSupportedMetricType(metricType)) {
                 res.status(400).json({
-                    error: `metric_type must be one of: ${METRIC_TYPES.join(", ")}`,
+                    error: getMetricTypeValidationMessage(),
                 })
                 return
             }
@@ -2750,6 +3358,7 @@ function createApp(options = {}) {
 
     app.get("/firebase/preview/:deviceId", async (req, res) => {
         const config = getFirebaseConfig()
+        const authToken = extractFirebaseAuthToken(req)
 
         if (!firebaseDb && !config.databaseUrl) {
             res.status(503).json({ error: "Firebase is disabled" })
@@ -2758,8 +3367,11 @@ function createApp(options = {}) {
 
         try {
             const deviceId = String(req.params.deviceId || "").trim()
-            const pathToRead = joinFirebasePath(config.deviceRootPath, deviceId)
-            const payload = await readFirebaseValue(pathToRead)
+            const deviceEntries = await loadFirebaseDeviceEntriesByIds([deviceId], config, { authToken })
+            const deviceEntry = deviceEntries[0] || null
+            const pathToRead = deviceEntry?.path
+                || buildFirebaseDevicePath(config.deviceRootPath, "{owner}", deviceId)
+            const payload = deviceEntry?.payload || null
 
             if (!payload) {
                 res.status(404).json({ error: `No Firebase data found at ${pathToRead}` })
@@ -3041,17 +3653,16 @@ function createApp(options = {}) {
             const decodedToken = await verifyFirebaseUserFromRequest(req)
             const requestedOwnerUid = String(req.body?.ownerUid || req.query.ownerUid || "").trim()
             const ownerUid = decodedToken?.uid || requestedOwnerUid
+
             if (decodedToken?.uid && requestedOwnerUid && requestedOwnerUid !== decodedToken.uid) {
                 res.status(403).json({ error: "Authenticated user does not match requested ownerUid" })
                 return
             }
 
-            const deviceId = String(req.body?.deviceId || req.query.deviceId || "").trim()
-            const result = await syncFirebaseData({ ownerUid, deviceId })
-
-            res.json({
-                status: "success",
-                ...result,
+            await respondWithFirebaseSync(res, {
+                ownerUid,
+                deviceId: String(req.body?.deviceId || req.query.deviceId || "").trim(),
+                authToken: extractFirebaseAuthToken(req),
             })
         } catch (error) {
             state.lastFirebaseError = error.message
@@ -3063,12 +3674,9 @@ function createApp(options = {}) {
     app.post("/firebase/sync/:deviceId", async (req, res) => {
         try {
             await verifyFirebaseUserFromRequest(req)
-            const deviceId = String(req.params.deviceId || "").trim()
-            const result = await syncFirebaseData({ deviceId })
-
-            res.json({
-                status: "success",
-                ...result,
+            await respondWithFirebaseSync(res, {
+                deviceId: String(req.params.deviceId || "").trim(),
+                authToken: extractFirebaseAuthToken(req),
             })
         } catch (error) {
             state.lastFirebaseError = error.message
@@ -3093,7 +3701,11 @@ function createApp(options = {}) {
                 return
             }
 
-            res.json({ status: "success", sample: result.accepted[0], pushResult: result.pushResult })
+            res.json(
+                legacyIotDataResponse
+                    ? { status: "success" }
+                    : { status: "success", sample: result.accepted[0], pushResult: result.pushResult }
+            )
         } catch (error) {
             console.error(error.message)
             res.status(500).json({ error: "Failed to process iot/data" })
@@ -3135,6 +3747,8 @@ function createApp(options = {}) {
             const requestSeed = payload.seed
             const requestedMin = payload.min
             const requestedMax = payload.max
+            const numericRequestedMin = parseFiniteNumber(requestedMin)
+            const numericRequestedMax = parseFiniteNumber(requestedMax)
 
             if (!Number.isInteger(count) || count < 1 || count > 100) {
                 res.status(400).json({ error: "count must be an integer between 1 and 100" })
@@ -3144,9 +3758,9 @@ function createApp(options = {}) {
             if (
                 (requestedMin !== undefined || requestedMax !== undefined)
                 && (
-                    !Number.isFinite(Number(requestedMin))
-                    || !Number.isFinite(Number(requestedMax))
-                    || Number(requestedMin) >= Number(requestedMax)
+                    numericRequestedMin === null
+                    || numericRequestedMax === null
+                    || numericRequestedMin >= numericRequestedMax
                 )
             ) {
                 res.status(400).json({ error: "min and max must be finite numbers and min must be less than max" })
@@ -3165,11 +3779,11 @@ function createApp(options = {}) {
                 METRIC_TYPES.forEach((metricType) => {
                     const threshold = resolveThresholds()[metricType]
                     const range = threshold.max - threshold.min
-                    const min = Number.isFinite(Number(requestedMin))
-                        ? Number(requestedMin)
+                    const min = numericRequestedMin !== null
+                        ? numericRequestedMin
                         : threshold.min - range * 0.25
-                    const max = Number.isFinite(Number(requestedMax))
-                        ? Number(requestedMax)
+                    const max = numericRequestedMax !== null
+                        ? numericRequestedMax
                         : threshold.max + range * 0.25
                     const value = createRandomValueWithGenerator(min, max, random)
 
@@ -3183,13 +3797,29 @@ function createApp(options = {}) {
             }
 
             const result = await ingestSamples(samples, "dummy")
+            const derivedEsgSamples = [...new Set(result.accepted.map((sample) => sample.sensor_id))]
+                .map((sensorId) => {
+                    const sensorScore = Number(state.lastEsgScore?.sensorScores?.[sensorId])
+
+                    if (!Number.isFinite(sensorScore)) {
+                        return null
+                    }
+
+                    return {
+                        sensor_id: sensorId,
+                        metric_type: "esg_environment_score",
+                        value: sensorScore,
+                        timestamp: state.lastEsgScore?.computedAt || Date.now(),
+                    }
+                })
+                .filter(Boolean)
 
             res.json({
                 status: "success",
-                generated: result.accepted.length,
+                generated: result.accepted.length + derivedEsgSamples.length,
                 rejected: result.rejected.length,
                 seed: String(resolvedSeed),
-                samples: result.accepted,
+                samples: [...result.accepted, ...derivedEsgSamples],
                 pushResult: result.pushResult,
             })
         } catch (error) {
