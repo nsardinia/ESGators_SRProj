@@ -280,7 +280,7 @@ function NodeMapPage() {
                 </div>
                 <div>
                   <dt className="mb-1 text-[0.72rem] uppercase tracking-[0.08em] text-[#b4c2d8]">Last Update</dt>
-                      <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{formatLastUpdate(node.updatedAtMs)}</dd>
+                  <dd className="m-0 break-words text-[0.84rem] leading-[1.45] text-white">{formatLastUpdate(node.updatedAtMs)}</dd>
                 </div>
                 {node.telemetry && (
                   <>

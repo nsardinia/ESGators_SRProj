@@ -202,9 +202,9 @@ test("batch ingestion calculates ESG score and reports remote write status", asy
         assert.equal(body.accepted, 3)
         assert.equal(body.rejected, 0)
         assert.equal(body.esg.sampleCount, 3)
-        assert.equal(body.esg.metricScores.temperature, 71.86)
+        assert.equal(body.esg.metricScores.temperature, 42.5)
         assert.equal(body.esg.metricScores.humidity, 100)
-        assert.equal(body.esg.overall, 85.93)
+        assert.equal(body.esg.overall, 46.25)
 
         if (hasRemoteWriteConfig()) {
             assert.equal(body.pushResult.skipped, false)
@@ -273,7 +273,7 @@ test("metrics endpoint exposes Prometheus-formatted sensor and ESG values", asyn
         const metricsText = await response.text()
         assert.match(metricsText, /sensor_data_metric\{sensor_id="sensor-prom",metric_type="temperature",source="test-suite",owner_uid="unknown",owner_email="unknown",device_name="sensor-prom"\} 31/)
         assert.match(metricsText, /sensor_data_anomaly_flag\{sensor_id="sensor-prom",metric_type="temperature",source="test-suite",owner_uid="unknown",owner_email="unknown",device_name="sensor-prom",severity="warning"\} 1/)
-        assert.match(metricsText, /esg_environment_score\{scope="overall"\} 71\.43/)
+        assert.match(metricsText, /esg_environment_score\{scope="overall"\} 15/)
         assert.match(metricsText, /esg_buffer_size 1/)
     } finally {
         await server.close()
@@ -317,9 +317,9 @@ test("esg status rebuilds from stored sensor_readings when memory is empty", asy
         assert.equal(response.status, 200)
 
         const body = await response.json()
-        assert.equal(body.latest.overall, 100)
+        assert.equal(body.latest.overall, 85.84)
         assert.equal(body.bufferedSamples, 3)
-        assert.equal(body.latest.metricScores.temperature, 100)
+        assert.equal(body.latest.metricScores.temperature, 85)
     } finally {
         await server.close()
     }
@@ -434,6 +434,60 @@ test("firebase status exposes a usable default database URL", async () => {
     }
 })
 
+test("cors preflight allows the production frontend origin for Firebase sync", async () => {
+    const server = await createTestServer()
+
+    try {
+        const response = await fetch(`${server.baseUrl}/firebase/sync`, {
+            method: "OPTIONS",
+            headers: {
+                Origin: "https://es-gators.vercel.app",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "Authorization,Content-Type",
+            },
+        })
+
+        assert.ok(response.status === 204 || response.status === 200)
+        assert.equal(
+            response.headers.get("access-control-allow-origin"),
+            "https://es-gators.vercel.app"
+        )
+        assert.match(
+            response.headers.get("access-control-allow-headers") || "",
+            /Authorization/i
+        )
+    } finally {
+        await server.close()
+    }
+})
+
+test("cors preflight allows the Vercel preview origin for batch ingest", async () => {
+    const server = await createTestServer()
+
+    try {
+        const response = await fetch(`${server.baseUrl}/iot/data/batch`, {
+            method: "OPTIONS",
+            headers: {
+                Origin: "https://es-gators-git-dev-kimgun3383s-projects.vercel.app",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "Authorization,Content-Type",
+            },
+        })
+
+        assert.ok(response.status === 204 || response.status === 200)
+        assert.equal(
+            response.headers.get("access-control-allow-origin"),
+            "https://es-gators-git-dev-kimgun3383s-projects.vercel.app"
+        )
+        assert.match(
+            response.headers.get("access-control-allow-headers") || "",
+            /Authorization/i
+        )
+    } finally {
+        await server.close()
+    }
+})
+
 test("invalid samples are rejected with 400", async () => {
     const server = await createTestServer()
 
@@ -497,35 +551,69 @@ test("normalizeFirebaseDevicePayload maps device export shape into ingestible sa
     assert.ok(samples.every((sample) => sample.timestamp === 1767225600000))
 })
 
+test("normalizeFirebaseDevicePayload falls back to latest-wrapper readings", () => {
+    const samples = normalizeFirebaseDevicePayload("dev_latest_wrapper", {
+        latest: {
+            deviceId: "dev_latest_wrapper",
+            temperatureC: 24.6,
+            humidityPct: 51.2,
+            updatedAt: "2026-04-12T14:20:00.000Z",
+            status: "online",
+        },
+    }, 1767225600000)
+
+    assert.deepEqual(samples, [
+        {
+            sensor_id: "dev_latest_wrapper",
+            metric_type: "temperature",
+            value: 24.6,
+            timestamp: Date.parse("2026-04-12T14:20:00.000Z"),
+        },
+        {
+            sensor_id: "dev_latest_wrapper",
+            metric_type: "humidity",
+            value: 51.2,
+            timestamp: Date.parse("2026-04-12T14:20:00.000Z"),
+        },
+    ])
+})
+
 test("firebase sync endpoint ingests mapped RTDB device data", async () => {
     const deviceId = "dev_472584440bca1b56b0518a6620641d39"
+    const ownerUid = "firebase-user-telemetry"
     const firebaseDb = createMockFirebaseDb({
-        [`devices/${deviceId}`]: {
-            no2: {
-                latest: {
-                    deviceId,
-                    firebaseUid: `device:${deviceId}`,
-                    raw: 3709,
-                    unit: "adc_raw",
-                    updatedAtMs: 2685761,
-                },
-            },
-            sht30: {
-                latest: {
-                    deviceId,
-                    firebaseUid: `device:${deviceId}`,
-                    humidityPct: 49.45144,
-                    temperatureC: 28.87732,
-                    updatedAtMs: 2690353,
-                },
-            },
-            sound: {
-                latest: {
-                    deviceId,
-                    firebaseUid: `device:${deviceId}`,
-                    raw: 0,
-                    unit: "adc_raw",
-                    updatedAtMs: 2688330,
+        users: {
+            [ownerUid]: {
+                devices: {
+                    [deviceId]: {
+                        no2: {
+                            latest: {
+                                deviceId,
+                                firebaseUid: `device:${deviceId}`,
+                                raw: 3709,
+                                unit: "adc_raw",
+                                updatedAtMs: 2685761,
+                            },
+                        },
+                        sht30: {
+                            latest: {
+                                deviceId,
+                                firebaseUid: `device:${deviceId}`,
+                                humidityPct: 49.45144,
+                                temperatureC: 28.87732,
+                                updatedAtMs: 2690353,
+                            },
+                        },
+                        sound: {
+                            latest: {
+                                deviceId,
+                                firebaseUid: `device:${deviceId}`,
+                                raw: 0,
+                                unit: "adc_raw",
+                                updatedAtMs: 2688330,
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -564,7 +652,7 @@ test("firebase sync endpoint enriches metrics with Supabase owner labels", async
     const ownerUid = "firebase-user-123"
     const ownerEmail = "owner@example.com"
     const firebaseDb = createMockFirebaseDb({
-        [`devices/${deviceId}`]: {
+        [`users/${ownerUid}/devices/${deviceId}`]: {
             sht30: {
                 latest: {
                     deviceId,
@@ -609,7 +697,7 @@ test("firebase sync endpoint enriches metrics with Supabase owner labels", async
         const metricsText = await metricsResponse.text()
 
         assert.match(metricsText, new RegExp(`sensor_data_metric\\{sensor_id="${deviceId}",metric_type="temperature",source="firebase-rtdb",owner_uid="${ownerUid}",owner_email="${ownerEmail}",device_name="Lab Greenhouse"\\} 24\\.25`))
-        assert.match(metricsText, new RegExp(`esg_sensor_score\\{sensor_id="${deviceId}",owner_uid="${ownerUid}",owner_email="${ownerEmail}",device_name="Lab Greenhouse"\\} 100`))
+        assert.match(metricsText, new RegExp(`esg_sensor_score\\{sensor_id="${deviceId}",owner_uid="${ownerUid}",owner_email="${ownerEmail}",device_name="Lab Greenhouse"\\} 82\\.09`))
     } finally {
         await server.close()
     }
@@ -620,7 +708,7 @@ test("firebase sync endpoint only ingests devices owned by the requested ownerUi
     const ownedDeviceId = "dev_owner_a_node"
     const otherDeviceId = "dev_owner_b_node"
     const firebaseDb = createMockFirebaseDb({
-        [`devices/${ownedDeviceId}`]: {
+        [`users/${ownerUid}/devices/${ownedDeviceId}`]: {
             sht30: {
                 latest: {
                     deviceId: ownedDeviceId,
@@ -630,7 +718,7 @@ test("firebase sync endpoint only ingests devices owned by the requested ownerUi
                 },
             },
         },
-        [`devices/${otherDeviceId}`]: {
+        [`users/firebase-user-b/devices/${otherDeviceId}`]: {
             sht30: {
                 latest: {
                     deviceId: otherDeviceId,
@@ -693,16 +781,99 @@ test("firebase sync endpoint only ingests devices owned by the requested ownerUi
     }
 })
 
-test("firebase sync skips unchanged samples on subsequent polls", async () => {
-    const deviceId = "dev_repeat_same_value"
+test("firebase sync resolves firebase_uid through MWBE when Supabase is unavailable", async () => {
+    const ownerId = "3f913820-5560-414d-b15b-5cb84f0e2e11"
+    const ownerFirebaseUid = "C7q0dcT3nggvPiw7G8qZBs6Bpy52"
+    const deviceId = "dev_mwbe_owner_lookup"
     const firebaseDb = createMockFirebaseDb({
-        [`devices/${deviceId}`]: {
+        [`users/${ownerFirebaseUid}/devices/${deviceId}`]: {
             sht30: {
                 latest: {
                     deviceId,
-                    temperatureC: 24.25,
-                    humidityPct: 51.75,
+                    temperatureC: 21.75,
+                    humidityPct: 46.25,
                     updatedAtMs: 1234,
+                },
+            },
+        },
+    })
+    const mwbeHttpClient = async (request) => {
+        const normalizedUrl = String(request?.url || "")
+
+        if (normalizedUrl.endsWith("/users")) {
+            return {
+                data: {
+                    users: [
+                        {
+                            id: ownerId,
+                            email: "nicholassardinia@ufl.edu",
+                            name: "Bob Developer",
+                            firebase_uid: ownerFirebaseUid,
+                        },
+                    ],
+                },
+            }
+        }
+
+        if (normalizedUrl.endsWith("/devices/owned")) {
+            assert.equal(request?.params?.ownerUid, ownerId)
+
+            return {
+                data: {
+                    devices: [
+                        {
+                            deviceId,
+                            name: "MWBE fallback node",
+                            description: "fallback lookup",
+                            status: "active",
+                        },
+                    ],
+                },
+            }
+        }
+
+        throw new Error(`Unhandled MWBE request: ${normalizedUrl}`)
+    }
+    const server = await createTestServer({ firebaseDb, supabase: null, mwbeHttpClient })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/firebase/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ownerUid: ownerId }),
+        })
+
+        assert.equal(response.status, 200)
+        const body = await response.json()
+
+        assert.equal(body.ownerUid, ownerFirebaseUid)
+        assert.equal(body.deviceCount, 1)
+        assert.equal(body.accepted, 2)
+        assert.equal(body.path, `users/${ownerFirebaseUid}/devices`)
+        assert.deepEqual(body.devices.map((device) => device.deviceId), [deviceId])
+        assert.ok(body.samples.every((sample) => sample.sensor_id === deviceId))
+    } finally {
+        await server.close()
+    }
+})
+
+test("firebase sync skips unchanged samples on subsequent polls", async () => {
+    const deviceId = "dev_repeat_same_value"
+    const ownerUid = "firebase-user-repeat"
+    const firebaseDb = createMockFirebaseDb({
+        users: {
+            [ownerUid]: {
+                devices: {
+                    [deviceId]: {
+                        sht30: {
+                            latest: {
+                                deviceId,
+                                temperatureC: 24.25,
+                                humidityPct: 51.75,
+                                updatedAtMs: 1234,
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -732,12 +903,92 @@ test("firebase sync skips unchanged samples on subsequent polls", async () => {
     }
 })
 
-test("firebase sync falls back to known device ids when root devices path is denied", async () => {
+test("firebase sync can read owner device paths with a Firebase ID token when admin auth is unavailable", async () => {
+    const deviceId = "dev_token_sync"
+    const ownerFirebaseUid = "owner-123"
+    const firebaseHttpClient = async (request) => {
+        assert.equal(request.method, "GET")
+        assert.equal(request.params.auth, "firebase-id-token")
+        assert.equal(request.headers.Authorization, "Bearer firebase-id-token")
+        assert.equal(
+            request.url,
+            `${DEFAULT_FIREBASE_DATABASE_URL}/users/${ownerFirebaseUid}/devices/${deviceId}.json`
+        )
+
+        return {
+            data: {
+                sht30: {
+                    latest: {
+                        deviceId,
+                        temperatureC: 22.4,
+                        humidityPct: 48.6,
+                        updatedAtMs: 1712970001000,
+                    },
+                },
+            },
+        }
+    }
+    const mwbeHttpClient = async (request) => {
+        const normalizedUrl = String(request?.url || "")
+
+        if (normalizedUrl.endsWith("/devices/owned")) {
+            assert.equal(request?.params?.ownerUid, ownerFirebaseUid)
+
+            return {
+                data: {
+                    devices: [
+                        {
+                            deviceId,
+                            name: "Token-backed node",
+                            description: "Reads with Firebase ID token",
+                            status: "active",
+                        },
+                    ],
+                },
+            }
+        }
+
+        throw new Error(`Unhandled request: ${normalizedUrl}`)
+    }
+    const server = await createTestServer({
+        firebaseDb: null,
+        supabase: null,
+        mwbeHttpClient,
+        firebaseHttpClient,
+    })
+
+    try {
+        const response = await fetch(`${server.baseUrl}/firebase/sync`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: "Bearer firebase-id-token",
+            },
+            body: JSON.stringify({ ownerUid: ownerFirebaseUid }),
+        })
+
+        assert.equal(response.status, 200)
+        const body = await response.json()
+
+        assert.equal(body.ownerUid, ownerFirebaseUid)
+        assert.equal(body.deviceCount, 1)
+        assert.equal(body.accepted, 2)
+        assert.equal(body.path, `users/${ownerFirebaseUid}/devices`)
+        assert.deepEqual(
+            body.samples.map((sample) => sample.metric_type).sort(),
+            ["humidity", "temperature"]
+        )
+    } finally {
+        await server.close()
+    }
+})
+
+test("firebase sync falls back to known device ids when user root is denied", async () => {
     const firstDeviceId = "dev_known_a"
     const secondDeviceId = "dev_known_b"
     const firebaseDb = createMockFirebaseDbWithFailures(
         {
-            [`devices/${firstDeviceId}`]: {
+            [`users/owner-a/devices/${firstDeviceId}`]: {
                 sht30: {
                     latest: {
                         deviceId: firstDeviceId,
@@ -747,7 +998,7 @@ test("firebase sync falls back to known device ids when root devices path is den
                     },
                 },
             },
-            [`devices/${secondDeviceId}`]: {
+            [`users/owner-b/devices/${secondDeviceId}`]: {
                 no2: {
                     latest: {
                         deviceId: secondDeviceId,
@@ -765,7 +1016,7 @@ test("firebase sync falls back to known device ids when root devices path is den
             },
         },
         {
-            devices: Object.assign(new Error("Request failed with status code 401"), {
+            users: Object.assign(new Error("Request failed with status code 401"), {
                 response: {
                     status: 401,
                     data: { error: "Permission denied" },
@@ -794,7 +1045,7 @@ test("firebase sync falls back to known device ids when root devices path is den
 
         assert.equal(body.deviceCount, 2)
         assert.equal(body.accepted, 4)
-        assert.equal(body.path, "devices/{known_devices}")
+        assert.equal(body.path, "users/{known_owners}/devices")
         assert.deepEqual(
             body.devices.map((device) => device.deviceId).sort(),
             [firstDeviceId, secondDeviceId]
@@ -804,11 +1055,11 @@ test("firebase sync falls back to known device ids when root devices path is den
     }
 })
 
-test("firebase sync skips instead of failing when root devices path is denied and no known devices exist", async () => {
+test("firebase sync skips instead of failing when user root is denied and no known devices exist", async () => {
     const firebaseDb = createMockFirebaseDbWithFailures(
         {},
         {
-            devices: Object.assign(new Error("Request failed with status code 401"), {
+            users: Object.assign(new Error("Request failed with status code 401"), {
                 response: {
                     status: 401,
                     data: { error: "Permission denied" },

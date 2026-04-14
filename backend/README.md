@@ -29,6 +29,7 @@ Optional for Prometheus scraping:
 
 Optional MWBE sync config:
 - `MWBE_API_URL`
+- `MWBE_API_BASE_URL`
 - `MWBE_API_METHOD`
 - `MWBE_API_TIMEOUT_MS`
 - `MWBE_API_HEADERS_JSON`
@@ -46,9 +47,7 @@ For local development, the `mwbe` service now exposes a compatibility feed at
 `GET /api/sensors/latest`, which matches the example backend config below.
 
 Optional Firebase RTDB sync config:
-- `FIREBASE_SERVICE_ACCOUNT_JSON`
 - `FIREBASE_DATABASE_URL`
-- `FIREBASE_PROJECT_ID`
 - `VITE_FIREBASE_PROJECT_ID`
 - `FIREBASE_DEVICE_ROOT_PATH`
 - `FIREBASE_SOURCE_NAME`
@@ -56,6 +55,13 @@ Optional Firebase RTDB sync config:
 - `FIREBASE_BACKGROUND_POLLING_ENABLED`
 - `FIREBASE_SYNC_INTERVAL_MS`
 - `FIREBASE_SYNC_ON_START`
+
+Optional admin/background Firebase config:
+- `FIREBASE_SERVICE_ACCOUNT_JSON`
+- `FIREBASE_PROJECT_ID`
+- `FIREBASE_CLIENT_EMAIL`
+- `FIREBASE_PRIVATE_KEY`
+- `FIREBASE_SERVICE_ACCOUNT_PATH`
 
 Optional Kalshi API config:
 - `KALSHI_ENVIRONMENT` (`production` or `demo`)
@@ -74,8 +80,9 @@ If no Firebase env vars are set, the backend falls back to:
 - 5 second polling interval
 
 Firebase sync notes:
-- backend background polling is disabled by default; the temporary flow is user-session polling from the frontend against registered device IDs
-- if `devices.json` is denied, the backend falls back to per-device reads via `FIREBASE_SYNC_DEVICE_IDS` or the Supabase `devices` table
+- backend background polling is disabled by default; the current app flow reuses the signed-in Firebase user token from the frontend, the same auth session used by the Node Map page
+- the current RTDB layout is `users/{firebase_uid}/devices/{device_id}/{no2|sht30|sound|...}`
+- if `users.json` is denied, the backend falls back to per-device reads via `FIREBASE_SYNC_DEVICE_IDS` or the Supabase `devices` table
 - if neither of those is available, background polling is skipped instead of repeatedly failing with 401
 - unchanged Firebase values are skipped so Prometheus is only updated when a metric changes
 
@@ -97,6 +104,7 @@ GRAFANA_API_KEY=glc_xxx
 GRAFANA_PUSH_URL=https://prometheus-prod-xx.grafana.net/api/prom/push
 
 MWBE_API_URL=http://localhost:3000/api/sensors/latest
+MWBE_API_BASE_URL=http://localhost:3000
 MWBE_API_METHOD=GET
 MWBE_API_RESPONSE_PATH=data.items
 MWBE_API_SENSOR_ID_FIELD=sensor_id
@@ -108,7 +116,7 @@ MWBE_SYNC_ON_START=false
 
 FIREBASE_DATABASE_URL=https://senior-project-esgators-default-rtdb.firebaseio.com
 VITE_FIREBASE_PROJECT_ID=senior-project-esgators
-FIREBASE_DEVICE_ROOT_PATH=devices
+FIREBASE_DEVICE_ROOT_PATH=users
 FIREBASE_SOURCE_NAME=firebase-rtdb
 
 KALSHI_ENVIRONMENT=demo
@@ -316,7 +324,9 @@ Current Firebase device mapping:
 
 If a Firebase `updatedAtMs` value is not an absolute Unix timestamp, the backend falls back to the current server time before sending the sample to Prometheus.
 
-If `backend/firebase-key.json` or `FIREBASE_SERVICE_ACCOUNT_JSON` is not available yet, the backend falls back to read-only Firebase REST GET using `FIREBASE_DATABASE_URL` or `VITE_FIREBASE_PROJECT_ID`.
+For direct per-device reads, the backend resolves Firebase payloads from `users/{ownerUid}/devices/{deviceId}`.
+
+If `backend/firebase-key.json`, `FIREBASE_SERVICE_ACCOUNT_JSON`, or the split env vars `FIREBASE_PROJECT_ID` + `FIREBASE_CLIENT_EMAIL` + `FIREBASE_PRIVATE_KEY` are not available yet, the backend falls back to read-only Firebase REST GET using `FIREBASE_DATABASE_URL` or `VITE_FIREBASE_PROJECT_ID`.
 That fallback only works when RTDB security rules allow read access for the requested path.
 
 ## Prometheus metrics for Grafana

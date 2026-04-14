@@ -9,6 +9,7 @@ import { auth } from "../lib/firebase-auth"
 import { isFirebaseConfigured } from "../lib/firebase-core"
 
 const AuthContext = createContext(null)
+
 function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)

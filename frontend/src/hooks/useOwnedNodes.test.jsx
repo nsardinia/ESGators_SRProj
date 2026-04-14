@@ -83,6 +83,10 @@ describe("useOwnedNodes", () => {
       expect(result.current.warning).toMatch(/live telemetry is unavailable/i)
     })
 
+    expect(mockRef).toHaveBeenCalledWith(
+      { name: "test-database" },
+      "users/owner-123/devices/node-1"
+    )
     expect(result.current.error).toBe("")
     expect(result.current.createdNodes[0]).toMatchObject({
       id: "node-1",

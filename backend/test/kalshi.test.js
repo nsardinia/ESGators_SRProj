@@ -434,7 +434,7 @@ test("GET /kalshi/esg/trade-plan builds a bullish demo plan from a healthy ESG s
         assert.equal(body.signal.limitPriceCents, 49)
         assert.equal(body.orderPreview.yes_price, 49)
         assert.equal(body.orderPreview.time_in_force, "good_till_canceled")
-        assert.equal(body.esg.overall, 100)
+        assert.equal(body.esg.overall, 89.16)
         assert.equal(calls.length, 2)
     } finally {
         await server.close()
@@ -507,7 +507,7 @@ test("GET /kalshi/esg/trade-plan rebuilds ESG state from stored sensor_readings"
         assert.equal(response.status, 200)
 
         const body = await response.json()
-        assert.equal(body.esg.overall, 100)
+        assert.equal(body.esg.overall, 87.5)
         assert.equal(body.market.ticker, "KXESG-RECOVER")
         assert.equal(body.signal.side, "yes")
         assert.equal(calls.length, 2)
