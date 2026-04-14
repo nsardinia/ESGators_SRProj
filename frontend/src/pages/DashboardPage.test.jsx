@@ -2,7 +2,12 @@ import { fireEvent, render, screen } from "@testing-library/react"
 import DashboardPage from "./DashboardPage"
 
 vi.mock("../components/AuthContext", () => ({
-  useAuth: () => ({ user: null }),
+  useAuth: () => ({
+    user: {
+      uid: "owner-123",
+      email: "owner@example.com",
+    },
+  }),
 }))
 
 describe("DashboardPage", () => {

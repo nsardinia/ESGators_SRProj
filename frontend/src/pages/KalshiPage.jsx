@@ -34,19 +34,21 @@ const demoScenarioOptions = [
   {
     key: "strong",
     label: "Strong ESG",
-    description: "Healthy sensor readings push the ESG score high and bias the demo toward YES.",
+    description: "Stable NO2 and noise baselines plus near-target temperature and humidity keep the score bullish.",
   },
   {
     key: "mixed",
     label: "Mixed ESG",
-    description: "A few warning signals create a smaller hedge-style order suggestion.",
+    description: "Rising NO2 and louder sound nudge the score lower while temperature and humidity drift off target.",
   },
   {
     key: "weak",
     label: "Weak ESG",
-    description: "Critical readings drag the ESG score down and bias the demo toward NO.",
+    description: "A sharp NO2 spike, noisy readings, and hot humid air drag the score toward a defensive NO bias.",
   },
 ]
+const metricScoreDisplayOrder = ["no2", "noise_levels", "temperature", "humidity"]
+const scenarioSampleOffsetsMs = [-9, -7, -5, -3, -1, 0].map((minutes) => minutes * 60 * 1000)
 
 const cardClassName =
   "rounded-[8px] border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,255,255,0.02),transparent),var(--bg-elevated)] p-[18px] shadow-[0_18px_44px_rgba(0,0,0,0.24)]"
@@ -64,6 +66,14 @@ const usdFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
 })
+const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+})
 
 function formatDate(value) {
   if (!value) {
@@ -76,7 +86,7 @@ function formatDate(value) {
     return String(value)
   }
 
-  return parsed.toLocaleString()
+  return dateTimeFormatter.format(parsed)
 }
 
 function formatCoordinateValue(value) {
@@ -123,7 +133,7 @@ function formatUnixTimestamp(value) {
   }
 
   const timestampMs = numericValue > 1_000_000_000_000 ? numericValue : numericValue * 1000
-  return new Date(timestampMs).toLocaleString()
+  return dateTimeFormatter.format(new Date(timestampMs))
 }
 
 function parseOrderTimestamp(order) {
@@ -245,39 +255,41 @@ function sortOrdersNewestFirst(orders) {
 function buildScenarioPayload(preset) {
   const now = Date.now()
   const sensorId = `kalshi-demo-${preset}`
-  const scenarioValues = {
+  const scenarioSeries = {
     strong: {
-      temperature: 23.8,
-      humidity: 47,
-      air_quality: 48,
-      no2: 22,
-      noise_levels: 42,
+      temperature: [22.3, 22.4, 22.5, 22.6, 22.7, 22.8],
+      humidity: [49, 49, 50, 50, 49, 49],
+      air_quality: [46, 45, 45, 44, 45, 45],
+      no2: [23, 22, 22, 22, 23, 23],
+      noise_levels: [42, 42, 43, 42, 42, 43],
     },
     mixed: {
-      temperature: 31.2,
-      humidity: 66,
-      air_quality: 92,
-      no2: 81,
-      noise_levels: 72,
+      temperature: [24.5, 25.2, 25.9, 26.8, 27.6, 28.5],
+      humidity: [52, 53, 55, 56, 58, 60],
+      air_quality: [68, 72, 75, 79, 82, 86],
+      no2: [30, 31, 33, 36, 44, 60],
+      noise_levels: [57, 58, 58, 59, 60, 66],
     },
     weak: {
-      temperature: 39.5,
-      humidity: 88,
-      air_quality: 182,
-      no2: 168,
-      noise_levels: 96,
+      temperature: [27, 29, 31, 34, 37, 39.5],
+      humidity: [55, 60, 66, 74, 81, 88],
+      air_quality: [88, 96, 108, 128, 154, 182],
+      no2: [25, 26, 27, 29, 45, 168],
+      noise_levels: [44, 45, 45, 46, 47, 96],
     },
   }
-  const selectedValues = scenarioValues[preset] || scenarioValues.mixed
+  const selectedSeries = scenarioSeries[preset] || scenarioSeries.mixed
 
   return {
     source: `kalshi-demo-${preset}`,
-    samples: Object.entries(selectedValues).map(([metric_type, value], index) => ({
-      sensor_id: sensorId,
-      metric_type,
-      value,
-      timestamp: now + index,
-    })),
+    samples: Object.entries(selectedSeries).flatMap(([metric_type, values], metricIndex) =>
+      values.map((value, index) => ({
+        sensor_id: sensorId,
+        metric_type,
+        value,
+        timestamp: now + scenarioSampleOffsetsMs[index] + metricIndex,
+      }))
+    ),
   }
 }
 
@@ -669,8 +681,18 @@ function KalshiPage() {
 
   const metricScores = useMemo(() => {
     const entries = Object.entries(esgStatus?.latest?.metricScores || {})
+    const orderIndex = new Map(metricScoreDisplayOrder.map((metricType, index) => [metricType, index]))
 
-    return entries.sort((left, right) => Number(right[1]) - Number(left[1]))
+    return entries.sort((left, right) => {
+      const leftIndex = orderIndex.has(left[0]) ? orderIndex.get(left[0]) : Number.MAX_SAFE_INTEGER
+      const rightIndex = orderIndex.has(right[0]) ? orderIndex.get(right[0]) : Number.MAX_SAFE_INTEGER
+
+      if (leftIndex !== rightIndex) {
+        return leftIndex - rightIndex
+      }
+
+      return String(left[0]).localeCompare(String(right[0]))
+    })
   }, [esgStatus])
 
   const ownedNodesWithLocations = useMemo(() => {
@@ -877,7 +899,7 @@ function KalshiPage() {
               </div>
 
               <div className="space-y-2">
-                <p className="text-[0.82rem] uppercase tracking-[0.05em] text-[var(--muted)]">Metric scores</p>
+                <p className="text-[0.82rem] uppercase tracking-[0.05em] text-[var(--muted)]">Score components</p>
                 {metricScores.length === 0 ? (
                   <p className="text-[0.92rem] text-[var(--muted)]">No metric scores available yet.</p>
                 ) : (
