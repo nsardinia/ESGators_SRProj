@@ -246,17 +246,7 @@ function pickSensorValue(payload, aliases, preferredParents = []) {
   return bestValue
 }
 
-function hasSensorReadings(telemetry) {
-  return [
-    telemetry?.temperatureC,
-    telemetry?.humidityPct,
-    telemetry?.no2,
-    telemetry?.soundLevel,
-    telemetry?.particulateMatterLevel,
-  ].some((value) => Number.isFinite(value))
-}
-
-function normalizeNodeTelemetry(telemetry, receivedAtMs = Date.now()) {
+function normalizeNodeTelemetry(telemetry) {
   if (!telemetry || typeof telemetry !== "object") {
     return null
   }
@@ -285,10 +275,7 @@ function normalizeNodeTelemetry(telemetry, receivedAtMs = Date.now()) {
   }
 
   const derivedUpdatedAtMs = deriveUpdatedAtMs(telemetry)
-  normalizedTelemetry.updatedAtMs =
-    derivedUpdatedAtMs !== null
-      ? derivedUpdatedAtMs
-      : (hasSensorReadings(normalizedTelemetry) ? receivedAtMs : null)
+  normalizedTelemetry.updatedAtMs = derivedUpdatedAtMs
 
   return normalizedTelemetry
 }

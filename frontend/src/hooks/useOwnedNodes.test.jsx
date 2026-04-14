@@ -259,4 +259,83 @@ describe("useOwnedNodes", () => {
       },
     })
   })
+
+  it("does not treat subscription time as the last update when telemetry has no timestamp", async () => {
+    global.fetch = vi.fn(async (url) => {
+      const normalizedUrl = String(url)
+
+      if (normalizedUrl.endsWith("/users")) {
+        return {
+          ok: true,
+          json: async () => ({
+            user: {
+              firebase_uid: "owner-123",
+            },
+          }),
+        }
+      }
+
+      if (normalizedUrl.includes("/devices/owned")) {
+        return {
+          ok: true,
+          json: async () => ({
+            devices: [
+              {
+                deviceId: "node-3",
+                name: "Timestamp-free node",
+                description: "Reports sensor values without a recorded time",
+                status: "claimed",
+              },
+            ],
+          }),
+        }
+      }
+
+      throw new Error(`Unhandled fetch URL: ${normalizedUrl}`)
+    })
+
+    mockOnValue.mockImplementation((reference, handleValue) => {
+      handleValue({
+        val: () => ({
+          sht30: {
+            latest: {
+              temperatureC: 22.1,
+              humidityPct: 46.8,
+            },
+          },
+          sound: {
+            latest: {
+              raw: 54.2,
+            },
+          },
+        }),
+      })
+      return vi.fn()
+    })
+
+    const user = {
+      uid: "firebase-user-1",
+      email: "owner@example.com",
+      displayName: "Owner",
+      getIdToken: vi.fn(async () => "test-token"),
+    }
+
+    const { result } = renderHook(() => useOwnedNodes(user))
+
+    await waitFor(() => {
+      expect(result.current.createdNodes[0]?.telemetry?.temperatureC).toBe(22.1)
+    })
+
+    expect(result.current.createdNodes[0]).toMatchObject({
+      id: "node-3",
+      status: "claimed",
+      updatedAtMs: null,
+      telemetry: {
+        temperatureC: 22.1,
+        humidityPct: 46.8,
+        soundLevel: 54.2,
+        updatedAtMs: null,
+      },
+    })
+  })
 })
