@@ -145,4 +145,105 @@ describe("RegisteredDeviceSync", () => {
 
     unmount()
   })
+
+  it("uploads latest-wrapper payloads that Node Map can already display", async () => {
+    const fetchCalls = []
+
+    global.fetch = vi.fn(async (url, options = {}) => {
+      const normalizedUrl = String(url)
+      fetchCalls.push({
+        url: normalizedUrl,
+        method: String(options.method || "GET").toUpperCase(),
+        body: options.body || "",
+        headers: options.headers || {},
+      })
+
+      if (normalizedUrl.endsWith("/users")) {
+        return {
+          ok: true,
+          json: async () => ({
+            user: {
+              firebase_uid: "owner-123",
+            },
+          }),
+        }
+      }
+
+      if (normalizedUrl.includes("/devices/owned")) {
+        return {
+          ok: true,
+          json: async () => ({
+            devices: [
+              {
+                deviceId: "node-2",
+                name: "Flat latest node",
+                description: "Publishes latest wrapper readings",
+                status: "claimed",
+              },
+            ],
+          }),
+        }
+      }
+
+      if (normalizedUrl.endsWith("/iot/data/batch")) {
+        return {
+          ok: true,
+          json: async () => ({
+            status: "success",
+            accepted: 2,
+          }),
+        }
+      }
+
+      throw new Error(`Unhandled fetch URL: ${normalizedUrl}`)
+    })
+
+    mockGet.mockResolvedValue({
+      val: () => ({
+        latest: {
+          deviceId: "node-2",
+          temperatureC: 24.6,
+          humidityPct: 51.2,
+          updatedAt: "2026-04-12T14:20:00.000Z",
+          status: "online",
+        },
+      }),
+    })
+
+    const { unmount } = render(<RegisteredDeviceSync />)
+
+    await waitFor(() => {
+      expect(
+        fetchCalls.some((call) => call.url.endsWith("/iot/data/batch"))
+      ).toBe(true)
+    })
+
+    const syncCall = fetchCalls.find((call) => call.url.endsWith("/iot/data/batch"))
+
+    expect(JSON.parse(syncCall.body)).toEqual({
+      source: "firebase-rtdb",
+      samples: [
+        {
+          sensor_id: "node-2",
+          metric_type: "temperature",
+          value: 24.6,
+          timestamp: Date.parse("2026-04-12T14:20:00.000Z"),
+          owner_uid: "owner-123",
+          owner_email: "owner@example.com",
+          device_name: "Flat latest node",
+        },
+        {
+          sensor_id: "node-2",
+          metric_type: "humidity",
+          value: 51.2,
+          timestamp: Date.parse("2026-04-12T14:20:00.000Z"),
+          owner_uid: "owner-123",
+          owner_email: "owner@example.com",
+          device_name: "Flat latest node",
+        },
+      ],
+    })
+
+    unmount()
+  })
 })

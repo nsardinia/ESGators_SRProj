@@ -497,6 +497,33 @@ test("normalizeFirebaseDevicePayload maps device export shape into ingestible sa
     assert.ok(samples.every((sample) => sample.timestamp === 1767225600000))
 })
 
+test("normalizeFirebaseDevicePayload falls back to latest-wrapper readings", () => {
+    const samples = normalizeFirebaseDevicePayload("dev_latest_wrapper", {
+        latest: {
+            deviceId: "dev_latest_wrapper",
+            temperatureC: 24.6,
+            humidityPct: 51.2,
+            updatedAt: "2026-04-12T14:20:00.000Z",
+            status: "online",
+        },
+    }, 1767225600000)
+
+    assert.deepEqual(samples, [
+        {
+            sensor_id: "dev_latest_wrapper",
+            metric_type: "temperature",
+            value: 24.6,
+            timestamp: Date.parse("2026-04-12T14:20:00.000Z"),
+        },
+        {
+            sensor_id: "dev_latest_wrapper",
+            metric_type: "humidity",
+            value: 51.2,
+            timestamp: Date.parse("2026-04-12T14:20:00.000Z"),
+        },
+    ])
+})
+
 test("firebase sync endpoint ingests mapped RTDB device data", async () => {
     const deviceId = "dev_472584440bca1b56b0518a6620641d39"
     const ownerUid = "firebase-user-telemetry"

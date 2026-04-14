@@ -15,16 +15,22 @@ const FIREBASE_SENSOR_MAPPINGS = [
 function normalizeFirebaseTimestamp(rawTimestamp, fallbackTimestamp = Date.now()) {
   const numeric = Number(rawTimestamp)
 
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    return Math.trunc(fallbackTimestamp)
+  if (Number.isFinite(numeric) && numeric > 0) {
+    if (numeric >= FIREBASE_TIMESTAMP_MIN_MS) {
+      return Math.trunc(numeric)
+    }
+
+    if (numeric >= FIREBASE_TIMESTAMP_MIN_SECONDS) {
+      return Math.trunc(numeric * 1000)
+    }
   }
 
-  if (numeric >= FIREBASE_TIMESTAMP_MIN_MS) {
-    return Math.trunc(numeric)
-  }
+  if (typeof rawTimestamp === "string" && rawTimestamp.trim() !== "") {
+    const parsed = Date.parse(rawTimestamp)
 
-  if (numeric >= FIREBASE_TIMESTAMP_MIN_SECONDS) {
-    return Math.trunc(numeric * 1000)
+    if (!Number.isNaN(parsed)) {
+      return Math.trunc(parsed)
+    }
   }
 
   return Math.trunc(fallbackTimestamp)
@@ -36,17 +42,36 @@ function normalizeTelemetryPayload(payload) {
   }
 
   if (!FIREBASE_TELEMETRY_BUCKETS.some((bucket) => payload?.[bucket]?.latest)) {
-    const updatedAtMs = Number.isFinite(Number(payload.updatedAtMs ?? payload.timestamp ?? payload.recordedAt))
-      ? normalizeFirebaseTimestamp(payload.updatedAtMs ?? payload.timestamp ?? payload.recordedAt)
+    const flatSource = payload?.latest && typeof payload.latest === "object"
+      ? payload.latest
+      : payload
+    const updatedAtRawValue =
+      flatSource.updatedAtMs
+      ?? flatSource.updatedAt
+      ?? flatSource.timestamp
+      ?? flatSource.recordedAt
+      ?? payload.updatedAtMs
+      ?? payload.updatedAt
+      ?? payload.timestamp
+      ?? payload.recordedAt
+    const updatedAtMs = updatedAtRawValue !== null && updatedAtRawValue !== undefined && String(updatedAtRawValue).trim() !== ""
+      ? normalizeFirebaseTimestamp(updatedAtRawValue)
       : null
-    const normalizedStatus = String(payload.status || "").trim()
-    const temperatureC = payload.temperatureC ?? null
-    const humidityPct = payload.humidityPct ?? null
-    const batteryVolts = payload.batteryVolts ?? null
-    const no2Raw = payload.no2Raw ?? payload.raw ?? null
-    const soundRaw = payload.soundRaw ?? null
-    const particulateMatterLevel = payload.particulateMatterLevel ?? null
-    const airQuality = payload.airQuality ?? particulateMatterLevel ?? null
+    const normalizedStatus = String(flatSource.status ?? payload.status ?? "").trim()
+    const temperatureC = flatSource.temperatureC ?? payload.temperatureC ?? null
+    const humidityPct = flatSource.humidityPct ?? payload.humidityPct ?? null
+    const batteryVolts = flatSource.batteryVolts ?? payload.batteryVolts ?? null
+    const no2Raw = flatSource.no2Raw ?? payload.no2Raw ?? null
+    const soundRaw = flatSource.soundRaw ?? payload.soundRaw ?? null
+    const particulateMatterLevel =
+      flatSource.particulateMatterLevel
+      ?? payload.particulateMatterLevel
+      ?? null
+    const airQuality =
+      flatSource.airQuality
+      ?? payload.airQuality
+      ?? particulateMatterLevel
+      ?? null
     const hasFlatTelemetry = [
       temperatureC,
       humidityPct,
@@ -120,6 +145,8 @@ function normalizeTelemetryPayload(payload) {
 function normalizeFirebaseDevicePayload(deviceId, payload, now = Date.now()) {
   const defaultSensorId = String(
     deviceId
+    || payload?.latest?.deviceId
+    || payload?.deviceId
     || payload?.sht30?.latest?.deviceId
     || payload?.no2?.latest?.deviceId
     || payload?.sound?.latest?.deviceId
@@ -157,6 +184,50 @@ function normalizeFirebaseDevicePayload(deviceId, payload, now = Date.now()) {
         latest.updatedAtMs ?? latest.timestamp ?? latest.recordedAt,
         now
       ),
+    })
+  })
+
+  if (samples.length > 0) {
+    return samples
+  }
+
+  const telemetry = normalizeTelemetryPayload(payload)
+  const fallbackTimestamp = telemetry?.updatedAtMs ?? now
+  const fallbackSensorId = String(
+    defaultSensorId
+    || payload?.latest?.deviceId
+    || payload?.deviceId
+    || ""
+  ).trim()
+
+  if (!telemetry || !fallbackSensorId) {
+    return samples
+  }
+
+  const fallbackMappings = [
+    { metric_type: "temperature", value: telemetry.temperatureC },
+    { metric_type: "humidity", value: telemetry.humidityPct },
+    { metric_type: "no2", value: telemetry.no2Raw },
+    { metric_type: "noise_levels", value: telemetry.soundRaw },
+    { metric_type: "air_quality", value: telemetry.airQuality },
+  ]
+
+  fallbackMappings.forEach((mapping) => {
+    if (mapping.value === null || mapping.value === undefined || mapping.value === "") {
+      return
+    }
+
+    const numericValue = Number(mapping.value)
+
+    if (!Number.isFinite(numericValue)) {
+      return
+    }
+
+    samples.push({
+      sensor_id: fallbackSensorId,
+      metric_type: mapping.metric_type,
+      value: numericValue,
+      timestamp: normalizeFirebaseTimestamp(fallbackTimestamp, now),
     })
   })
 

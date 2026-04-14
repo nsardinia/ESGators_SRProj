@@ -980,16 +980,22 @@ function buildFirebaseDevicePath(deviceRootPath, ownerUid, deviceId) {
 function normalizeFirebaseTimestamp(rawTimestamp, fallbackTimestamp = Date.now()) {
     const numeric = Number(rawTimestamp)
 
-    if (!Number.isFinite(numeric) || numeric <= 0) {
-        return Math.trunc(fallbackTimestamp)
+    if (Number.isFinite(numeric) && numeric > 0) {
+        if (numeric >= FIREBASE_TIMESTAMP_MIN_MS) {
+            return Math.trunc(numeric)
+        }
+
+        if (numeric >= FIREBASE_TIMESTAMP_MIN_SECONDS) {
+            return Math.trunc(numeric * 1000)
+        }
     }
 
-    if (numeric >= FIREBASE_TIMESTAMP_MIN_MS) {
-        return Math.trunc(numeric)
-    }
+    if (typeof rawTimestamp === "string" && rawTimestamp.trim() !== "") {
+        const parsed = Date.parse(rawTimestamp)
 
-    if (numeric >= FIREBASE_TIMESTAMP_MIN_SECONDS) {
-        return Math.trunc(numeric * 1000)
+        if (!Number.isNaN(parsed)) {
+            return Math.trunc(parsed)
+        }
     }
 
     return Math.trunc(fallbackTimestamp)
@@ -998,6 +1004,8 @@ function normalizeFirebaseTimestamp(rawTimestamp, fallbackTimestamp = Date.now()
 function normalizeFirebaseDevicePayload(deviceId, payload, now = Date.now()) {
     const defaultSensorId = String(
         deviceId
+        || payload?.latest?.deviceId
+        || payload?.deviceId
         || payload?.sht30?.latest?.deviceId
         || payload?.no2?.latest?.deviceId
         || payload?.sound?.latest?.deviceId
@@ -1035,6 +1043,64 @@ function normalizeFirebaseDevicePayload(deviceId, payload, now = Date.now()) {
                 latest.updatedAtMs ?? latest.timestamp ?? latest.recordedAt,
                 now
             ),
+        })
+    })
+
+    if (samples.length > 0) {
+        return samples
+    }
+
+    const flatSource = payload?.latest && typeof payload.latest === "object"
+        ? payload.latest
+        : payload
+    const fallbackSensorId = String(defaultSensorId || "").trim()
+
+    if (!flatSource || typeof flatSource !== "object" || !fallbackSensorId) {
+        return samples
+    }
+
+    const fallbackTimestamp = normalizeFirebaseTimestamp(
+        flatSource.updatedAtMs
+        ?? flatSource.updatedAt
+        ?? flatSource.timestamp
+        ?? flatSource.recordedAt
+        ?? payload?.updatedAtMs
+        ?? payload?.updatedAt
+        ?? payload?.timestamp
+        ?? payload?.recordedAt,
+        now
+    )
+    const fallbackMappings = [
+        { metric_type: "temperature", value: flatSource.temperatureC ?? payload?.temperatureC },
+        { metric_type: "humidity", value: flatSource.humidityPct ?? payload?.humidityPct },
+        { metric_type: "no2", value: flatSource.no2Raw ?? payload?.no2Raw },
+        { metric_type: "noise_levels", value: flatSource.soundRaw ?? payload?.soundRaw },
+        {
+            metric_type: "air_quality",
+            value:
+                flatSource.airQuality
+                ?? payload?.airQuality
+                ?? flatSource.particulateMatterLevel
+                ?? payload?.particulateMatterLevel,
+        },
+    ]
+
+    fallbackMappings.forEach((mapping) => {
+        if (mapping.value === null || mapping.value === undefined || mapping.value === "") {
+            return
+        }
+
+        const numericValue = Number(mapping.value)
+
+        if (!Number.isFinite(numericValue)) {
+            return
+        }
+
+        samples.push({
+            sensor_id: fallbackSensorId,
+            metric_type: mapping.metric_type,
+            value: numericValue,
+            timestamp: fallbackTimestamp,
         })
     })
 
