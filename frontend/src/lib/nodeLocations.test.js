@@ -34,27 +34,6 @@ describe("nodeLocations", () => {
     })
   })
 
-  it("assigns Seoul coordinates to the known Seoul sensors", () => {
-    const nodes = buildNodesWithLocations([
-      { id: "node-3", name: "Seoul sensor 1" },
-      { id: "node-4", name: "Seoul sensor 2" },
-    ], {}).nodes
-
-    expect(nodes).toHaveLength(2)
-    expect(nodes[0]).toMatchObject({
-      latitude: 37.5665,
-      longitude: 126.978,
-      locationLabel: "Seoul, SK",
-      isLocationUnknown: false,
-    })
-    expect(nodes[1]).toMatchObject({
-      latitude: 37.5665,
-      longitude: 126.978,
-      locationLabel: "Seoul, SK",
-      isLocationUnknown: false,
-    })
-  })
-
   it("formats coordinate labels with four decimal places", () => {
     expect(formatCoordinateLabel(29.6516123, -82.3248123)).toBe("29.6516, -82.3248")
   })

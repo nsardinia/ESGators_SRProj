@@ -8,28 +8,9 @@ const GAINESVILLE_FALLBACK = {
   isUnknown: true,
 }
 
-const SEOUL_FALLBACK = {
-  latitude: 37.5665,
-  longitude: 126.978,
-  label: "Seoul, SK",
-  isUnknown: false,
-}
-
-const KNOWN_NODE_LOCATION_OVERRIDES = new Map([
-  ["seoulsensor1", SEOUL_FALLBACK],
-  ["seoulsensor2", SEOUL_FALLBACK],
-])
-
 function normalizeCoordinate(value) {
   const numericValue = Number(value)
   return Number.isFinite(numericValue) ? numericValue : null
-}
-
-function normalizeNodeLookupKey(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
 }
 
 function clampLatitude(latitude) {
@@ -178,20 +159,6 @@ function getNodeLocation(node, baseLocations = readStoredNodeLocations()) {
 
   if (storedLocation) {
     return storedLocation
-  }
-
-  const knownLocation = [
-    nodeId,
-    node?.name,
-    node?.label,
-    node?.deviceName,
-  ]
-    .map(normalizeNodeLookupKey)
-    .map((key) => KNOWN_NODE_LOCATION_OVERRIDES.get(key))
-    .find(Boolean)
-
-  if (knownLocation) {
-    return { ...knownLocation }
   }
 
   return { ...GAINESVILLE_FALLBACK }
