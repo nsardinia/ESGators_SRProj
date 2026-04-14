@@ -12,24 +12,24 @@ import "./SplashPage.css"
 
 const coreFeatures = [
   {
-    title: "Monitor",
-    description: "View live environmental telemetry and node status in one place.",
+    title: "Measure in real time",
+    description: "Collect continuously updated environmental readings from distributed sensor nodes instead of relying on stale reporting cycles.",
   },
   {
-    title: "Provision",
-    description: "Create nodes, assign ownership, and issue credentials with a cleaner workflow.",
+    title: "Scale affordably",
+    description: "Expand coverage with low-cost hardware built on Arduino, ESP32, and 3D-printed components without heavy startup capital.",
   },
   {
-    title: "Report",
-    description: "Hand off into dashboards and operational views built for ESG visibility.",
+    title: "Turn data into action",
+    description: "Access live data through a secure API, Grafana dashboards, and MCP-enabled analysis tools for sustainability and investment decisions.",
   },
 ]
 
-const trustPoints = ["Telemetry", "Node Management", "Secure Access", "Dashboard Ready"]
+const trustPoints = ["Real-Time Telemetry", "Distributed Sensors", "Secure API Access", "Grafana + LLM Analysis"]
 const previewStats = [
-  { label: "Active nodes", value: "128" },
-  { label: "Reporting status", value: "Healthy" },
-  { label: "Latest sync", value: "2 min ago" },
+  { label: "Data delivery", value: "Real time" },
+  { label: "Platform model", value: "Low cost" },
+  { label: "Network growth", value: "User scalable" },
 ]
 
 function SplashPage() {
@@ -63,22 +63,23 @@ function SplashPage() {
         <section className="mx-auto grid w-full max-w-[1180px] grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)] items-center gap-10 px-7 pt-14 max-[960px]:grid-cols-1 max-[720px]:gap-7 max-[720px]:px-4 max-[720px]:pt-[34px]">
           <div>
             <p className="mb-[14px] text-[0.84rem] font-bold uppercase tracking-[0.14em] text-[#b6f1d2]">
-              ESG intelligence for connected operations
+              Real-time environmental intelligence for the world.
             </p>
             <h1 className="mb-[18px] max-w-[11ch] text-[clamp(2.6rem,5vw,4.6rem)] leading-[0.96] tracking-[-0.04em] max-[960px]:max-w-[14ch] max-[720px]:max-w-none max-[720px]:text-[clamp(2.2rem,11vw,3.5rem)]">
-              Environmental monitoring for teams building modern ESG programs.
+              Environmental data at scale. Cheap, fault-tolerant, and real-time.
             </h1>
             <p className="m-0 max-w-[54ch] text-[1.02rem] leading-[1.72] text-[var(--muted)]">
-              ESGators brings telemetry, node provisioning, and dashboard visibility into a single platform
-              that feels clear before login and useful after it.
+              ESGators is a scalable, ultra-low-cost IoT platform that captures real-time environmental
+              measurements through distributed sensor networks so investors, corporations, governments,
+              and community leaders can make better-informed decisions.
             </p>
 
             <div className="my-7 flex flex-wrap gap-3">
               <NavLink className={buttonVariants({ size: "default" })} to="/auth">
-                Start with ESGators
+                Explore ESGators
               </NavLink>
               <a className={buttonVariants({ variant: "secondary", size: "default" })} href="#platform-overview">
-                View platform
+                See the platform
               </a>
             </div>
 
@@ -99,7 +100,7 @@ function SplashPage() {
             <div className="splash-showcase-glow" aria-hidden="true" />
             <div className="splash-showcase-heading">
               <p className="mb-3 text-[0.78rem] font-bold uppercase tracking-[0.08em] text-[var(--muted)]">Platform Overview</p>
-              <strong className="block max-w-[10ch] text-[1.7rem] leading-[1.2]">Unified ESG workspace</strong>
+              <strong className="block max-w-[12ch] text-[1.7rem] leading-[1.2]">Distributed sensing, unified insight</strong>
             </div>
             <div className="splash-showcase-chart" aria-hidden="true">
               <span className="chart-bar chart-bar-one" />
@@ -123,9 +124,11 @@ function SplashPage() {
           <div className="mx-auto w-full max-w-[1180px] px-7 max-[720px]:px-4">
             <div className="mb-6 max-w-[700px]">
               <p className="mb-[10px] pt-2 text-base font-bold uppercase tracking-[0.08em] text-[var(--muted)]">Platform</p>
-              <h2 className="mb-2 text-[clamp(1.4rem,2.4vw,2rem)] font-semibold">Use one platform for sensing, provisioning, and visibility.</h2>
+              <h2 className="mb-2 text-[clamp(1.4rem,2.4vw,2rem)] font-semibold">Built for the gap between ESG reporting and what is happening right now.</h2>
               <p className="mb-[18px] text-base font-medium text-[var(--muted)]">
-                A simpler structure, clearer hierarchy, and less copy make the product easier to understand at a glance.
+                Traditional sustainability and ESG assessments depend on infrequently reported data, which can make scores incomplete,
+                outdated, or unavailable. ESGators closes that gap with continuously collected environmental measurements that are accurate,
+                consistent, and delivered fast enough to support real decisions.
               </p>
             </div>
           </div>
@@ -138,7 +141,7 @@ function SplashPage() {
           <div className="mx-auto w-full max-w-[1180px] px-7 max-[720px]:px-4">
             <div className="mb-6 max-w-[700px]">
               <p className="mb-[10px] pt-2 text-base font-bold uppercase tracking-[0.08em] text-[var(--muted)]">Capabilities</p>
-              <h2 className="mb-2 text-[clamp(1.4rem,2.4vw,2rem)] font-semibold">Built to help teams manage ESG telemetry without extra clutter.</h2>
+              <h2 className="mb-2 text-[clamp(1.4rem,2.4vw,2rem)] font-semibold">A low-cost sensor platform that grows with the people using it.</h2>
             </div>
 
             <div className="grid grid-cols-3 gap-4 max-[960px]:grid-cols-1">
@@ -159,10 +162,10 @@ function SplashPage() {
           <div className="mx-auto flex w-full max-w-[1180px] items-center justify-between gap-4 rounded-[22px] border border-[rgba(62,207,142,0.18)] bg-[linear-gradient(135deg,rgba(62,207,142,0.08),rgba(105,168,255,0.06))] px-6 py-[22px] max-[720px]:flex-col max-[720px]:items-start">
             <div>
               <p className="mb-[10px] pt-2 text-base font-bold uppercase tracking-[0.08em] text-[var(--muted)]">Get Started</p>
-              <h2 className="mb-2 text-[clamp(1.4rem,2.4vw,2rem)] font-semibold">Sign in and open the workspace.</h2>
+              <h2 className="mb-2 text-[clamp(1.4rem,2.4vw,2rem)] font-semibold">Start building a real-time view of environmental performance.</h2>
             </div>
             <NavLink className={cn(buttonVariants({ size: "default" }), "shrink-0")} to="/auth">
-              Enter ESGators
+              Enter the platform
             </NavLink>
           </div>
         </section>
