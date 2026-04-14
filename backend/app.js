@@ -91,6 +91,9 @@ const DEFAULT_ALLOWED_WEB_ORIGINS = [
     "http://127.0.0.1:4173",
     "https://es-gators.vercel.app",
 ]
+const DEFAULT_ALLOWED_WEB_ORIGIN_PATTERNS = [
+    /^https:\/\/es-gators(?:-[a-z0-9-]+)?\.vercel\.app$/i,
+]
 const FIREBASE_SENSOR_MAPPINGS = [
     { bucket: "sht30", field: "temperatureC", metric_type: "temperature" },
     { bucket: "sht30", field: "humidityPct", metric_type: "humidity" },
@@ -158,6 +161,15 @@ function buildAllowedOrigins(...sources) {
     return [...new Set([...DEFAULT_ALLOWED_WEB_ORIGINS, ...configuredOrigins])]
 }
 
+function isAllowedOrigin(origin, allowedOrigins) {
+    const normalizedOrigin = normalizeOrigin(origin)
+
+    return (
+        allowedOrigins.includes(normalizedOrigin) ||
+        DEFAULT_ALLOWED_WEB_ORIGIN_PATTERNS.some((pattern) => pattern.test(normalizedOrigin))
+    )
+}
+
 function createCorsOptions() {
     const allowedOrigins = buildAllowedOrigins(
         process.env.CORS_ORIGIN,
@@ -177,7 +189,7 @@ function createCorsOptions() {
                 return
             }
 
-            callback(null, allowedOrigins.includes(normalizeOrigin(origin)))
+            callback(null, isAllowedOrigin(origin, allowedOrigins))
         },
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allowedHeaders: ["Content-Type", "Authorization"],

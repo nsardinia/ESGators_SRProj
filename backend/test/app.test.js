@@ -461,6 +461,33 @@ test("cors preflight allows the production frontend origin for Firebase sync", a
     }
 })
 
+test("cors preflight allows the Vercel preview origin for batch ingest", async () => {
+    const server = await createTestServer()
+
+    try {
+        const response = await fetch(`${server.baseUrl}/iot/data/batch`, {
+            method: "OPTIONS",
+            headers: {
+                Origin: "https://es-gators-git-dev-kimgun3383s-projects.vercel.app",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "Authorization,Content-Type",
+            },
+        })
+
+        assert.ok(response.status === 204 || response.status === 200)
+        assert.equal(
+            response.headers.get("access-control-allow-origin"),
+            "https://es-gators-git-dev-kimgun3383s-projects.vercel.app"
+        )
+        assert.match(
+            response.headers.get("access-control-allow-headers") || "",
+            /Authorization/i
+        )
+    } finally {
+        await server.close()
+    }
+})
+
 test("invalid samples are rejected with 400", async () => {
     const server = await createTestServer()
 
