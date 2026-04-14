@@ -89,6 +89,7 @@ const DEFAULT_ALLOWED_WEB_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:4173",
     "http://127.0.0.1:4173",
+    "https://es-gators.vercel.app",
 ]
 const FIREBASE_SENSOR_MAPPINGS = [
     { bucket: "sht30", field: "temperatureC", metric_type: "temperature" },
