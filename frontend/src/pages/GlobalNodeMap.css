@@ -1,3 +1,9 @@
+/**
+ * Custom CSS for the world map page
+ * 
+ * Last Edit: Nicholas Sardinia, 4/19/2026
+ */
+
 .global-node-map-page {
   display: flex;
   flex-direction: column;

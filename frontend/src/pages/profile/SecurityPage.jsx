@@ -1,9 +1,7 @@
 /**
  * Security management shell.
  *
- * TODO: implement functionality. Allow changes, provide support.
- *
- * Last Edit: Nicholas Sardinia, 3/1/2026
+ * Last Edit: Nicholas Sardinia, 4/19/2026
  */
 import Button from "../../components/ui/button"
 import { Card, CardContent } from "../../components/ui/card"

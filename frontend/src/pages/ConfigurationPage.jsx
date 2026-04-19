@@ -1,3 +1,9 @@
+/**
+ * Configuration page for radio network.
+ * 
+ * Last Edit: Nicholas Sardinia, 4/19/2026
+ */
+
 import NodeNetwork from "../components/NodeNetwork"
 import { useAuth } from "../components/AuthContext"
 import useOwnedNodes from "../hooks/useOwnedNodes"

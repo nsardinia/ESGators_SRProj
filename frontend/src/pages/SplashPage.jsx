@@ -3,7 +3,7 @@
  *
  * Landing page displayed to users before authentication.
  *
- * Last Edit: Nicholas Sardinia, 3/1/2026
+ * Last Edit: Nicholas Sardinia, 4/19/2026
  */
 import { NavLink } from "react-router-dom"
 import { buttonVariants } from "../components/ui/button"

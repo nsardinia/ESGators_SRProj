@@ -1,7 +1,7 @@
 /**
- * Node config page.
+ * Node management page.
  *
- * TODO: Add node configuration settings, public / private node access, etc.
+ * From this page, you can add / delete nodes, search nodes, and view real-time data.
  *
  * Last Edit: Nicholas Sardinia, 3/1/2026
  */

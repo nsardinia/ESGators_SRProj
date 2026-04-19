@@ -1,5 +1,6 @@
 /**
- * Application routing for the IoT environmental monitoring and ESG scoring dashboard
+ * Application routing for the IoT environmental monitoring and ESG scoring dashboard 
+ * Routing is lazy to reduce bundle size.
  * 
  * Last Edit: Nicholas Sardinia, 3/1/2026
  */

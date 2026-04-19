@@ -1,3 +1,8 @@
+/**
+ * Custom CSS for the node-map page (node-map is a list of all nodes, not 
+ the globe map). 
+ */
+
 .node-map-page {
   max-width: none;
   flex: 1 1 auto;

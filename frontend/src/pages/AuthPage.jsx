@@ -1,9 +1,7 @@
 /**
- * Login Page
+ * Login Page with firebase auth.
  * 
- * TODO: build out additional functionality (forgot password, etc)
- * 
- * Last Edit: Nicholas Sardinia, 3/1/2026
+ * Last Edit: Nicholas Sardinia, 4/19/2026
  */
 
 import { useEffect, useState } from "react"

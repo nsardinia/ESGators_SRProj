@@ -1,3 +1,9 @@
+/**
+ * World map page
+ * 
+ * Last Edit: Nicholas Sardinia, 4/19/2026
+ */
+
 import { Suspense, lazy, useEffect, useMemo, useState } from "react"
 import Button from "../components/ui/button"
 import { Card, CardContent } from "../components/ui/card"

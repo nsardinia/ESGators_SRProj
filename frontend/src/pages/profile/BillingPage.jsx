@@ -1,11 +1,7 @@
 /**
- * Billing page shell.
+ * Billing page shell
  *
- * TODO: implement functionality to enable sustainable scalability based on user DB reads and writes.
- * TODO: Determine best billing scheme. Reads + writes or charge for private writes and all reads.
- *       Private writes + all reads may encourage public data sharing. Will explore literature.
- *
- * Last Edit: Nicholas Sardinia, 3/1/2026
+ * Last Edit: Nicholas Sardinia, 4/19/2026
  */
 import Button from "../../components/ui/button"
 import { Card, CardContent } from "../../components/ui/card"

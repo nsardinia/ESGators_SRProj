@@ -1,9 +1,7 @@
 /**
  * User preferences page shell
  *
- * TODO: implement functionality. Store user preferences in supabase (postgress) table and fetch.
- *
- * Last Edit: Nicholas Sardinia, 3/1/2026
+ * Last Edit: Nicholas Sardinia, 4/19/2026
  */
 import { Card, CardContent } from "../../components/ui/card"
 

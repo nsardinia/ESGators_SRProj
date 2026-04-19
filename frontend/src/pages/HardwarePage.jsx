@@ -1,3 +1,11 @@
+/**
+ * Hardware documentation page
+ * 
+ * TODO: Add images of hardware and links to external resources.
+ * 
+ * Last Edit: Nicholas Sardinia, 4/19/2026
+ */
+
 import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent } from "../components/ui/card"
 import Button from "../components/ui/button"
