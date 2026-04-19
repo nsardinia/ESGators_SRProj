@@ -1,5 +1,5 @@
 set -a
-source backend/.env
+source ../backend/.env
 set +a
 
 fly secrets set -a your-mcp-app-name-winter-thunder-1708 \
