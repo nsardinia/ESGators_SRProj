@@ -202,6 +202,7 @@ const errorSchema = {
   },
 };
 
+// Ensures Supabase is configured before routes query or mutate relational data.
 function ensureDb(app) {
   if (!app.hasDecorator("supabase")) {
     throw app.httpErrors.internalServerError(
@@ -210,6 +211,7 @@ function ensureDb(app) {
   }
 }
 
+// Ensures Firebase auth is configured before device token minting is attempted.
 function ensureFirebase(app) {
   if (!app.hasDecorator("firebaseAuth")) {
     throw app.httpErrors.internalServerError(
@@ -218,6 +220,7 @@ function ensureFirebase(app) {
   }
 }
 
+// Returns Firebase auth when available so revocation/deletion can degrade gracefully.
 function getFirebaseAuthIfConfigured(app) {
   if (!app.hasDecorator("firebaseAuth")) {
     return null;
@@ -226,10 +229,12 @@ function getFirebaseAuthIfConfigured(app) {
   return app.firebaseAuth;
 }
 
+// Generates a random stable device id for newly claimed nodes.
 function generateDeviceId() {
   return `dev_${crypto.randomBytes(16).toString("hex")}`;
 }
 
+// Generates the raw secret a device will later present during provisioning.
 function generateDeviceSecret() {
   return crypto.randomBytes(32).toString("base64url");
 }
@@ -241,6 +246,7 @@ const GAINESVILLE_FALLBACK_LOCATION = {
   isLocationUnknown: true,
 };
 
+// Clamps arbitrary latitude input into a valid decimal-degree range.
 function normalizeLatitude(value) {
   const numericValue = Number(value);
 
@@ -251,6 +257,7 @@ function normalizeLatitude(value) {
   return Math.min(Math.max(numericValue, -90), 90);
 }
 
+// Wraps arbitrary longitude input into the valid decimal-degree range.
 function normalizeLongitude(value) {
   const numericValue = Number(value);
 
@@ -271,10 +278,12 @@ function normalizeLongitude(value) {
   return wrappedValue;
 }
 
+// Builds a readable fallback label from normalized coordinates.
 function formatCoordinateLabel(latitude, longitude) {
   return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
 }
 
+// Normalizes user-supplied location input into the shape stored in Supabase.
 function normalizeDeviceLocation(input = {}) {
   const latitude = normalizeLatitude(input.latitude);
   const longitude = normalizeLongitude(input.longitude);
@@ -295,6 +304,7 @@ function normalizeDeviceLocation(input = {}) {
   };
 }
 
+// Maps a Supabase device row into the response shape used by the API.
 function mapDeviceRecord(device) {
   const location = normalizeDeviceLocation({
     latitude: device.latitude,
@@ -315,10 +325,12 @@ function mapDeviceRecord(device) {
   };
 }
 
+// Encodes an owner hint into a provisioning secret-safe string.
 function encodeOwnerHint(ownerUid) {
   return Buffer.from(String(ownerUid || ""), "utf8").toString("base64url");
 }
 
+// Combines an owner hint with a raw secret so devices can carry owner context.
 function createProvisioningSecret(ownerUid, rawSecret) {
   const normalizedOwnerUid = String(ownerUid || "").trim();
   const normalizedRawSecret = String(rawSecret || "").trim();
@@ -330,6 +342,7 @@ function createProvisioningSecret(ownerUid, rawSecret) {
   return `esg1.${encodeOwnerHint(normalizedOwnerUid)}.${normalizedRawSecret}`;
 }
 
+// Splits a provisioning secret into its optional owner hint and raw secret parts.
 function parseProvisioningSecret(secret) {
   const normalizedSecret = String(secret || "").trim();
 
@@ -363,12 +376,14 @@ function parseProvisioningSecret(secret) {
   }
 }
 
+// Hashes a raw device secret before it is stored in the database.
 function createSecretHash(secret) {
   const salt = crypto.randomBytes(16);
   const derived = crypto.scryptSync(secret, salt, 64);
   return `scrypt$${salt.toString("base64")}$${derived.toString("base64")}`;
 }
 
+// Verifies a raw device secret against a stored scrypt hash.
 function verifySecret(secret, encodedHash) {
   const [algorithm, saltB64, hashB64] = String(encodedHash || "").split("$");
 
@@ -383,12 +398,14 @@ function verifySecret(secret, encodedHash) {
   return crypto.timingSafeEqual(actual, expected);
 }
 
+// Checks whether a value is a UUID so owner lookups can target the right column.
 function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     String(value || "")
   );
 }
 
+// Resolves an owner by Firebase UID first, then by users.id when a UUID is provided.
 async function findOwner(app, ownerUid) {
   const { data: ownerByFirebaseUid, error: ownerLookupError } = await app.supabase
     .from("users")
@@ -421,14 +438,7 @@ async function findOwner(app, ownerUid) {
   return ownerById;
 }
 
-async function findOwnerByDeviceOwnerKey(app, ownerKey) {
-  if (!ownerKey) {
-    return null;
-  }
-
-  return findOwner(app, ownerKey);
-}
-
+// Validates that a provisioning secret's owner hint matches the resolved owner.
 function ownerMatchesHint(owner, ownerHint) {
   const normalizedOwnerHint = String(ownerHint || "").trim();
 
@@ -443,6 +453,7 @@ function ownerMatchesHint(owner, ownerHint) {
   return ownerKeys.includes(normalizedOwnerHint);
 }
 
+// Loads owner records once and indexes them by both database id and Firebase UID.
 async function loadOwnersByKeys(app, ownerKeys) {
   if (ownerKeys.length === 0) {
     return new Map();
@@ -492,6 +503,7 @@ async function loadOwnersByKeys(app, ownerKeys) {
   return ownersByKey;
 }
 
+// Confirms that the authenticated owner has access to the requested device.
 async function ensureOwnedDevice(app, ownerUid, deviceId) {
   const owner = await findOwner(app, ownerUid);
 
@@ -521,6 +533,7 @@ async function ensureOwnedDevice(app, ownerUid, deviceId) {
   };
 }
 
+// Deletes a device and its historical telemetry rows from Supabase.
 async function deleteDeviceSupabaseRecords(app, deviceId, owner) {
   const ownerKeys = [...new Set([owner?.id, owner?.firebase_uid].filter(Boolean))];
 
@@ -553,6 +566,7 @@ async function deleteDeviceSupabaseRecords(app, deviceId, owner) {
   return deletedDevice;
 }
 
+// Registers all device ownership, provisioning, history, and lifecycle routes.
 async function devicesRoutes(app) {
   app.get(
     "/",
@@ -777,6 +791,7 @@ async function devicesRoutes(app) {
     }
   );
 
+  // Creates a new owned device record and returns its provisioning credentials.
   async function claimDevice(ownerUid, name, description, locationInput, reply) {
     ensureDb(app);
     const owner = await findOwner(app, ownerUid);
@@ -983,7 +998,7 @@ async function devicesRoutes(app) {
         throw app.httpErrors.unauthorized("Invalid device credentials");
       }
 
-      const owner = await findOwnerByDeviceOwnerKey(app, device.owner_uid);
+      const owner = await findOwner(app, device.owner_uid);
 
       if (!owner?.firebase_uid) {
         throw app.httpErrors.forbidden("Device owner is not configured for Firebase access");

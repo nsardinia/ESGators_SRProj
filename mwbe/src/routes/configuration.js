@@ -6,6 +6,7 @@
 
 const { verifyFirebaseUser } = require("../lib/firebaseUserAuth");
 
+// Checks whether a value is a UUID so owner lookup can safely fall back to users.id.
 function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     String(value || "")
@@ -75,6 +76,7 @@ const errorSchema = {
   },
 };
 
+// Ensures Firebase RTDB is available before configuration routes try to write to it.
 function ensureFirebaseDb(app) {
   if (!app.hasDecorator("firebaseDb")) {
     throw app.httpErrors.internalServerError(
@@ -83,6 +85,7 @@ function ensureFirebaseDb(app) {
   }
 }
 
+// Ensures Supabase is available before owner records are looked up.
 function ensureDb(app) {
   if (!app.hasDecorator("supabase")) {
     throw app.httpErrors.internalServerError(
@@ -91,6 +94,7 @@ function ensureDb(app) {
   }
 }
 
+// Resolves an owner by Firebase UID first, then by users.id when a UUID is provided.
 async function findOwner(app, ownerUid) {
   const { data: ownerByFirebaseUid, error: ownerLookupError } = await app.supabase
     .from("users")
@@ -123,6 +127,7 @@ async function findOwner(app, ownerUid) {
   return ownerById;
 }
 
+// Registers routes that persist authenticated user radio network config into Firebase.
 async function configurationRoutes(app) {
   app.post(
     "/radio-network",

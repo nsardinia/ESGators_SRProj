@@ -1,7 +1,8 @@
 /**
- * Compatibility sensor feed routes for the metrics backend.
+ * Compatibility sensor feed routes for the metrics backend. 
+ * Allows grafana to read from user data. 
  *
- * Last Edit: Codex, 4/11/2026
+ * Last Edit: Nicholas Sardinia, 4/19/2026
  */
 
 const latestSensorsQuerySchema = {

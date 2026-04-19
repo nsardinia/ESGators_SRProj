@@ -1,10 +1,11 @@
 /**
  * Fastify basic functionality test endpoints
  * 
- * TODO: remove. 
+ * Retained to keep basic smoke test functionality. Does not contribute
+ * to application function.
  * 
  * 
- * Last Edit: Nicholas Sardinia, 3/1/2026
+ * Last Edit: Nicholas Sardinia, 4/19/2026
  */
 async function rootRoutes(app) {
   app.get(

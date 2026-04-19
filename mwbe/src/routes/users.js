@@ -44,6 +44,7 @@ const errorSchema = {
   },
 };
 
+// Ensures Supabase is configured before user routes access the database.
 function ensureDb(app) {
   if (!app.hasDecorator("supabase")) {
     throw app.httpErrors.internalServerError(
@@ -52,7 +53,9 @@ function ensureDb(app) {
   }
 }
 
+// Registers CRUD routes for user records stored in Supabase.
 async function usersRoutes(app) {
+  // Lists all users ordered by most recently created first.
   app.get(
     "/",
     {
@@ -89,6 +92,7 @@ async function usersRoutes(app) {
     }
   );
 
+  // Fetches one user by its UUID primary key.
   app.get(
     "/:id",
     {
@@ -129,6 +133,7 @@ async function usersRoutes(app) {
     }
   );
 
+  // Creates a new user or updates an existing one matched by email or Firebase UID.
   app.post(
     "/",
     {
@@ -211,6 +216,7 @@ async function usersRoutes(app) {
     }
   );
 
+  // Updates a specific user record by UUID.
   app.put(
     "/:id",
     {
@@ -266,6 +272,7 @@ async function usersRoutes(app) {
     }
   );
 
+  // Deletes a specific user record by UUID.
   app.delete(
     "/:id",
     {
