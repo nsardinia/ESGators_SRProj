@@ -2,8 +2,9 @@
  * Firebase configuration handled as fastify plugin. Allows all backend routes to interface with firebase using 
  * service keys stored in firebaseServiceKeys.json (not public). Creates firebase connections.
  * 
- * Last Edit: Nicholas Sardinia, 3/1/2026
+ * Last Edit: Nicholas Sardinia, 4/19/2026
  */
+
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -11,6 +12,8 @@ function normalizePrivateKey(privateKey) {
   return String(privateKey || "").replace(/\\n/g, "\n");
 }
 
+
+//Reads the firebase service account information from the MWBE env.
 function readServiceAccountFromEnv() {
   if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
     return JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
@@ -31,6 +34,7 @@ function readServiceAccountFromEnv() {
   };
 }
 
+//read database information from env.
 function getDatabaseUrl(serviceAccount) {
   const explicitDatabaseUrl = process.env.FIREBASE_DATABASE_URL;
 
@@ -50,6 +54,7 @@ function getDatabaseUrl(serviceAccount) {
   return `https://${projectId}-default-rtdb.firebaseio.com`;
 }
 
+// setup firebase admin and attach clients to the fastify app.
 function registerFirebase(app) {
   let admin;
 

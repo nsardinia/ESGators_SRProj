@@ -549,6 +549,66 @@ def _history_rows(
     limit: int,
     config: dict[str, str],
 ) -> list[dict[str, Any]]:
+    metric_mappings = [
+        ("no2", "no2"),
+        ("sound_level", "noise_levels"),
+        ("particulate_matter_level", "air_quality"),
+        ("temperature", "temperature"),
+        ("humidity", "humidity"),
+    ]
+
+    device_history_rows = _supabase_select(
+        "device_history",
+        select=(
+            "sample_key,device_id,captured_at,source_updated_at,sample_interval_start,"
+            "no2,sound_level,particulate_matter_level,temperature,humidity"
+        ),
+        filters=[
+            f"device_id=eq.{device_id}",
+            f"sample_interval_start=gte.{start_iso}",
+            f"sample_interval_start=lte.{end_iso}",
+        ],
+        order="sample_interval_start.desc",
+        limit=limit,
+        config=config,
+    )
+
+    normalized_rows: list[dict[str, Any]] = []
+    for row in device_history_rows:
+        sensor_id = str(row.get("device_id") or "").strip()
+        if not sensor_id:
+            continue
+
+        timestamp = row.get("source_updated_at") or row.get("captured_at") or row.get("sample_interval_start")
+        created_at = row.get("captured_at") or row.get("sample_interval_start")
+
+        for source_field, normalized_metric_type in metric_mappings:
+            if metric_type and normalized_metric_type != metric_type:
+                continue
+
+            numeric_value = row.get(source_field)
+            if numeric_value is None:
+                continue
+
+            try:
+                value = float(numeric_value)
+            except (TypeError, ValueError):
+                continue
+
+            normalized_rows.append(
+                {
+                    "id": row.get("sample_key") or f"{sensor_id}:{normalized_metric_type}:{timestamp}",
+                    "sensor_id": sensor_id,
+                    "metric_type": normalized_metric_type,
+                    "value": value,
+                    "recorded_at": timestamp,
+                    "created_at": created_at,
+                }
+            )
+
+    if normalized_rows:
+        return normalized_rows[:limit]
+
     filters = [
         f"sensor_id=eq.{device_id}",
         f"recorded_at=gte.{start_iso}",

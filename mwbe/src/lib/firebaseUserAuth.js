@@ -1,5 +1,12 @@
-"use strict";
+/**
+ * Firebase user auth module. Uses the firebase.js plugin and firebase auth to
+ * validate users signing into the application. This software ensures requests
+ * are coming only from authorized users using firebase auth.
+ * 
+ * Last Edit: Nicholas Sardinia, 4/19/2026
+ */
 
+//validate firebase auth configuration
 function ensureFirebaseAuth(app) {
   if (!app.hasDecorator("firebaseAuth")) {
     throw app.httpErrors.internalServerError(
@@ -8,6 +15,7 @@ function ensureFirebaseAuth(app) {
   }
 }
 
+//get token from auth header
 function getBearerToken(request) {
   const authorizationHeader = request.headers.authorization;
 
@@ -24,6 +32,7 @@ function getBearerToken(request) {
   return token;
 }
 
+//validate user ID token and reject invalid tokens.
 async function verifyFirebaseUser(app, request) {
   ensureFirebaseAuth(app);
 

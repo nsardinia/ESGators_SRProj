@@ -1,5 +1,9 @@
 /**
- * Swagger/OpenAPI documentation for the Fastify API.
+ * Swagger/OpenAPI documentation for the Fastify API.  Swagger is an
+ * api documentation tool that allows for simple in-browser manual test
+ * and demonstration.
+ * 
+ * Last update: 4/19/2026, Nicholas Sardinia
  */
 const swagger = require("@fastify/swagger");
 const swaggerUi = require("@fastify/swagger-ui");

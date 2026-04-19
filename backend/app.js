@@ -93,6 +93,7 @@ const DEFAULT_ALLOWED_WEB_ORIGINS = [
 ]
 const DEFAULT_ALLOWED_WEB_ORIGIN_PATTERNS = [
     /^https:\/\/es-gators(?:-[a-z0-9-]+)?\.vercel\.app$/i,
+    /^https:\/\/[a-z0-9-]+\.vercel\.app$/i,
 ]
 const FIREBASE_SENSOR_MAPPINGS = [
     { bucket: "sht30", field: "temperatureC", metric_type: "temperature" },

@@ -1,61 +1,16 @@
-"use strict";
+/**
+ * Syncs telemetry from firebase to supabase for persistent storage.
+ * 
+ * 
+ * Last Edit: Nicholas Sardinia, 4/19/2026
+ */
 
+
+//set constants for sync time
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
 const DEFAULT_MAX_SNAPSHOT_AGE_MS = 30_000;
 const DEFAULT_HISTORY_LIMIT = 360;
 const MAX_HISTORY_LIMIT = 2_000;
-
-const SENSOR_DEFINITIONS = [
-  {
-    key: "no2",
-    aliases: ["no2", "nitrogendioxide", "nitrogendioxide"],
-  },
-  {
-    key: "sound_level",
-    aliases: ["soundlevel", "soundleveldb", "sound_level", "noise", "db", "decibel"],
-  },
-  {
-    key: "particulate_matter_level",
-    aliases: [
-      "particulatematterlevel",
-      "particulatematterlevel",
-      "particulate_matter_level",
-      "particulatematter",
-      "particulate_matter",
-      "pm",
-      "pm25",
-      "pm2_5",
-    ],
-  },
-  {
-    key: "temperature",
-    aliases: ["temperature", "temp"],
-  },
-  {
-    key: "humidity",
-    aliases: ["humidity", "humid"],
-  },
-];
-
-const TIMESTAMP_KEY_NAMES = new Set([
-  "updatedatms",
-  "eventatms",
-  "timestampms",
-  "recordedatms",
-  "createdatms",
-  "updatedat",
-  "eventat",
-  "timestamp",
-  "recordedat",
-  "createdat",
-]);
-
-function normalizeLookupKey(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
-}
 
 function parseNumericValue(value) {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -101,126 +56,61 @@ function parseTimestampMs(value) {
   return null;
 }
 
-function collectLeafValues(value, path = [], acc = [], seen = new Set()) {
-  if (!value || typeof value !== "object") {
-    return acc;
+function getSensorBucket(payload, bucketName) {
+  const bucket = payload?.[bucketName];
+
+  if (!bucket || typeof bucket !== "object") {
+    return null;
   }
 
-  if (seen.has(value)) {
-    return acc;
+  if (bucket.latest && typeof bucket.latest === "object") {
+    return bucket.latest;
   }
 
-  seen.add(value);
-
-  if (Array.isArray(value)) {
-    value.forEach((child, index) => {
-      collectLeafValues(child, path.concat(String(index)), acc, seen);
-    });
-    return acc;
-  }
-
-  Object.entries(value).forEach(([key, child]) => {
-    const nextPath = path.concat(key);
-    const numericValue = parseNumericValue(child);
-
-    if (numericValue !== null) {
-      acc.push({
-        key,
-        normalizedKey: normalizeLookupKey(key),
-        normalizedPath: nextPath.map(normalizeLookupKey),
-        value: numericValue,
-      });
-      return;
-    }
-
-    collectLeafValues(child, nextPath, acc, seen);
-  });
-
-  return acc;
-}
-
-function collectTimestampCandidates(value, acc = [], seen = new Set()) {
-  if (!value || typeof value !== "object") {
-    return acc;
-  }
-
-  if (seen.has(value)) {
-    return acc;
-  }
-
-  seen.add(value);
-
-  if (Array.isArray(value)) {
-    value.forEach((child) => collectTimestampCandidates(child, acc, seen));
-    return acc;
-  }
-
-  Object.entries(value).forEach(([key, child]) => {
-    const normalizedKey = normalizeLookupKey(key);
-
-    if (TIMESTAMP_KEY_NAMES.has(normalizedKey)) {
-      const parsedTimestamp = parseTimestampMs(child);
-
-      if (parsedTimestamp !== null) {
-        acc.push(parsedTimestamp);
-      }
-    }
-
-    if (child && typeof child === "object") {
-      collectTimestampCandidates(child, acc, seen);
-    }
-  });
-
-  return acc;
-}
-
-function scoreCandidate(candidate, aliases) {
-  let score = 0;
-
-  aliases.forEach((alias) => {
-    if (candidate.normalizedKey === alias) {
-      score = Math.max(score, 100);
-    }
-
-    if (candidate.normalizedPath.includes(alias)) {
-      score = Math.max(score, 80);
-    }
-
-    if (candidate.normalizedKey.includes(alias) || alias.includes(candidate.normalizedKey)) {
-      score = Math.max(score, 60);
-    }
-  });
-
-  return score;
+  return bucket;
 }
 
 function pickSensorValues(payload) {
-  const candidates = collectLeafValues(payload);
-  const sensorValues = {};
+  const no2 = getSensorBucket(payload, "no2");
+  const sht30 = getSensorBucket(payload, "sht30");
+  const sound = getSensorBucket(payload, "sound");
+  const pms5003 = getSensorBucket(payload, "pms5003");
 
-  SENSOR_DEFINITIONS.forEach((sensor) => {
-    let bestScore = 0;
-    let bestValue = null;
+  return {
+    no2: parseNumericValue(no2?.no2 ?? no2?.raw ?? no2?.value),
+    sound_level: parseNumericValue(sound?.soundLevel ?? sound?.sound_level ?? sound?.raw),
+    particulate_matter_level: parseNumericValue(
+      pms5003?.particulateMatterLevel ?? pms5003?.particulate_matter_level ?? pms5003?.pm25
+    ),
+    temperature: parseNumericValue(sht30?.temperatureC ?? sht30?.temperature),
+    humidity: parseNumericValue(sht30?.humidityPct ?? sht30?.humidity),
+  };
+}
 
-    candidates.forEach((candidate) => {
-      const score = scoreCandidate(candidate, sensor.aliases);
+function collectTimestampCandidates(payload) {
+  const buckets = [
+    getSensorBucket(payload, "no2"),
+    getSensorBucket(payload, "sht30"),
+    getSensorBucket(payload, "sound"),
+    getSensorBucket(payload, "pms5003"),
+    payload?.latest,
+    payload,
+  ];
 
-      if (score > bestScore) {
-        bestScore = score;
-        bestValue = candidate.value;
-      }
-    });
-
-    sensorValues[sensor.key] = bestValue;
-  });
-
-  return sensorValues;
+  return buckets
+    .map((bucket) =>
+      parseTimestampMs(
+        bucket?.updatedAtMs ?? bucket?.updatedAt ?? bucket?.timestamp ?? bucket?.recordedAt
+      )
+    )
+    .filter((timestamp) => timestamp !== null);
 }
 
 function floorToInterval(timestampMs, intervalMs) {
   return Math.floor(timestampMs / intervalMs) * intervalMs;
 }
 
+//ensure data added to supabase is new
 function isFreshSnapshot(sourceUpdatedAtMs, capturedAtMs, maxSnapshotAgeMs) {
   if (!Number.isFinite(sourceUpdatedAtMs) || !Number.isFinite(capturedAtMs)) {
     return false;
@@ -233,6 +123,7 @@ function isFreshSnapshot(sourceUpdatedAtMs, capturedAtMs, maxSnapshotAgeMs) {
   return capturedAtMs - sourceUpdatedAtMs <= maxSnapshotAgeMs;
 }
 
+//normalize telemetry for insertion into DB.
 function normalizeTelemetrySnapshot({
   deviceId,
   ownerUid,
@@ -279,6 +170,7 @@ function normalizeTelemetrySnapshot({
   };
 }
 
+//key normalization when migrating device provisioning schemes.
 async function loadOwnerMap(app, ownerKeys) {
   const owners = new Map();
   const uniqueOwnerKeys = [...new Set(ownerKeys.filter(Boolean))];
@@ -336,6 +228,7 @@ async function loadOwnerMap(app, ownerKeys) {
   return owners;
 }
 
+//Send device history to supabase. 
 async function syncDeviceHistoryOnce(app, options = {}) {
   if (!app.hasDecorator("supabase") || !app.hasDecorator("firebaseDb")) {
     return {
@@ -420,6 +313,7 @@ async function syncDeviceHistoryOnce(app, options = {}) {
   };
 }
 
+//Starts a background history sync in MWBE
 function registerDeviceHistory(app) {
   const pollIntervalMs = Number(
     process.env.DEVICE_HISTORY_POLL_INTERVAL_MS || DEFAULT_POLL_INTERVAL_MS

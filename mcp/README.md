@@ -202,7 +202,7 @@ Use the ESGators MCP tools to inspect my greenhouse device. Summarize the latest
 ## Notes
 
 - realtime reads come from Firebase RTDB
-- history reads come from Supabase `sensor_readings`
+- history reads come from Supabase `device_history` first, with `sensor_readings` as a fallback
 - owner and device metadata are enriched from Supabase `devices` and `users`
 - `get_backend_status` expects the Express backend to be running
 
