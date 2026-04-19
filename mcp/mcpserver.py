@@ -1,3 +1,19 @@
+"""
+    MCP server to allow LLM integration with the platform.
+
+    The server provides the following tools:
+        1. get_mcp_context() - Return the current MCP data-source configuration for Firebase, backend, and Supabase.
+        2. list_devices() - List known IoT devices from Supabase, optionally filtered by owner_uid/firebase_uid.
+        3. get_device_latest() - Fetch the latest realtime Firebase payload for a device and normalize it into metric samples.
+        4. get_device_history() - Fetch historical readings for a device from Supabase over the last N hours.
+        5. get_device_inference_context() - Return compact current-plus-history context formatted for downstream OpenAI inference prompts.
+        6. get_backend_status() - Fetch the Express backend Firebase/ESG status.
+        7. search() - Search devices and available data contexts for ChatGPT deep research and MCP retrieval flows.
+        8. fetch() - Fetch a detailed context object for a search result id such as device:<device_id> or system:backend-status.
+
+    Last edit: 4/19/2026, Nicholas Sardinia
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -13,6 +29,7 @@ from urllib import error, parse, request
 from fastmcp import FastMCP
 
 
+# Setting up the server
 MCP_NAME = "ESGatorsMCP"
 DEFAULT_FIREBASE_PROJECT_ID = "senior-project-esgators"
 DEFAULT_FIREBASE_DEVICE_ROOT_PATH = "devices"
@@ -196,7 +213,7 @@ def _firebase_has_admin_credentials(config: dict[str, str]) -> bool:
     except RuntimeError:
         return False
 
-
+# helper for HTTP request handling.
 def _http_json(
     url: str,
     *,
@@ -374,6 +391,7 @@ def _format_timestamp(timestamp_ms: int | None) -> str | None:
     return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).isoformat()
 
 
+# header config for supabase
 def _supabase_headers(config: dict[str, str]) -> dict[str, str]:
     api_key = str(config.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
     if not api_key:
@@ -391,7 +409,7 @@ def _supabase_rest_base_url(config: dict[str, str]) -> str:
         raise RuntimeError("SUPABASE_URL is not configured")
     return f"{supabase_url}/rest/v1"
 
-
+# helper for SQL queries on supabase
 def _supabase_select(
     table: str,
     *,
@@ -414,7 +432,7 @@ def _supabase_select(
     response = _http_json(url, headers=_supabase_headers(config))
     return response if isinstance(response, list) else []
 
-
+# helper for payload generation from firebase
 def _firebase_device_payload(device_id: str, config: dict[str, str]) -> dict[str, Any] | None:
     metadata = _device_metadata_map([device_id], config).get(device_id, {})
     owner_uid = str(metadata.get("owner_uid") or "").strip()
@@ -688,7 +706,8 @@ def _summarize_history(rows: list[dict[str, Any]], thresholds: dict[str, dict[st
         "anomaly_counts": anomaly_counts,
     }
 
-
+# The remaining code defines the MCP tools themselves, using the above
+# methods as helpers. 
 @mcp.tool
 def get_mcp_context() -> dict[str, Any]:
     """Return the current MCP data-source configuration for Firebase, backend, and Supabase."""
@@ -1003,7 +1022,7 @@ def fetch(id: str, hours: int = 24) -> dict[str, Any]:
 
     raise ValueError("Unsupported fetch id. Use a value returned by the search tool.")
 
-
+# allow for flexibility in server startup
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the ESGators MCP server for local or ChatGPT integration.")
     parser.add_argument(
@@ -1041,7 +1060,7 @@ def _parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
+# Run the server
 if __name__ == "__main__":
     args = _parse_args()
     show_banner = not args.no_banner
