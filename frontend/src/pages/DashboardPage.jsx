@@ -30,7 +30,13 @@ function buildGrafanaDashboardUrl(baseUrl, user) {
     return ""
   }
 
-  const dashboardUrl = new URL(baseUrl)
+  let dashboardUrl
+
+  try {
+    dashboardUrl = new URL(baseUrl)
+  } catch {
+    return ""
+  }
 
   if (user?.uid) {
     dashboardUrl.searchParams.set("var-owner_uid", user.uid)

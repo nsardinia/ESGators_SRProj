@@ -18,6 +18,7 @@ describe("api", () => {
     VITE_BACKEND_API_LOCAL_BASE_URL: import.meta.env.VITE_BACKEND_API_LOCAL_BASE_URL,
     VITE_BACKEND_API_PRODUCTION_BASE_URL: import.meta.env.VITE_BACKEND_API_PRODUCTION_BASE_URL,
   }
+  const trackedEnvKeys = Object.keys(originalEnv)
 
   async function loadApiModule() {
     vi.resetModules()
@@ -25,7 +26,14 @@ describe("api", () => {
   }
 
   afterEach(() => {
-    Object.assign(import.meta.env, originalEnv)
+    trackedEnvKeys.forEach((key) => {
+      if (originalEnv[key] === undefined) {
+        delete import.meta.env[key]
+        return
+      }
+
+      import.meta.env[key] = originalEnv[key]
+    })
   })
 
   it("prefers explicit base URLs and trims a trailing slash", async () => {
