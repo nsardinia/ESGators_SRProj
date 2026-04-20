@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SRProj Setup Preview</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, sans-serif; }
+    body { margin: 0; background: #f3f5f8; color: #1f2937; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 24px; }
+    .card {
+      background: #fff;
+      border: 1px solid #d9e2ec;
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, .08);
+    }
+    h1 { margin: 0 0 10px; font-size: 28px; }
+    p { line-height: 1.5; }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin: 18px 0 20px;
+    }
+    .pill {
+      background: #eef4ff;
+      border: 1px solid #c9d8ff;
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .msg {
+      padding: 12px 14px;
+      border-radius: 12px;
+      margin: 0 0 18px;
+      font-weight: 600;
+      background: #e8fff1;
+      border: 1px solid #98ddb1;
+      color: #116530;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      font-size: 15px;
+    }
+    input:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+    }
+    .full { grid-column: 1 / -1; }
+    .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 18px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .primary { background: #1d4ed8; color: #fff; }
+    .secondary { background: #e5e7eb; color: #111827; }
+    .hint { font-size: 13px; color: #475569; margin-top: 14px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Node Setup</h1>
+      <p>Use this page to override Wi-Fi and provisioning settings. If nothing is saved, the firmware keeps the defaults already compiled into the device.</p>
+
+      <div class="msg">Settings saved. Rebooting now.</div>
+
+      <div class="meta">
+        <div class="pill"><strong>Portal SSID</strong><br>SRProj-Setup-Node-3</div>
+        <div class="pill"><strong>Portal IP</strong><br>192.168.4.1</div>
+        <div class="pill"><strong>Wi-Fi State</strong><br>Connected</div>
+        <div class="pill"><strong>Station IP</strong><br>192.168.1.145</div>
+      </div>
+
+      <form>
+        <div class="grid">
+          <div>
+            <label for="wifiSsid">Wi-Fi Network Name</label>
+            <input id="wifiSsid" name="wifiSsid" value="ExampleNetwork">
+          </div>
+          <div>
+            <label for="wifiPassword">Wi-Fi Password</label>
+            <input id="wifiPassword" name="wifiPassword" type="password" value="example-password">
+          </div>
+          <div>
+            <label for="nodeId">Node ID</label>
+            <input id="nodeId" name="nodeId" type="number" min="1" max="255" value="3">
+          </div>
+          <div>
+            <label for="deviceId">Provisioning Device ID</label>
+            <input id="deviceId" name="deviceId" value="dev_mesh_gateway_3">
+          </div>
+          <div class="full">
+            <label for="deviceSecret">Node Secret</label>
+            <input id="deviceSecret" name="deviceSecret" value="replace-with-gateway-secret">
+          </div>
+          <div class="full">
+            <label for="backendBaseUrl">Backend Base URL</label>
+            <input id="backendBaseUrl" name="backendBaseUrl" value="https://srprojmwbe.fly.dev">
+          </div>
+          <div class="full">
+            <label for="firebaseApiKey">Firebase API Key</label>
+            <input id="firebaseApiKey" name="firebaseApiKey" value="your-firebase-web-api-key">
+          </div>
+          <div class="full">
+            <label for="firebaseDatabaseUrl">Firebase Database URL</label>
+            <input id="firebaseDatabaseUrl" name="firebaseDatabaseUrl" value="https://your-project-default-rtdb.firebaseio.com">
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="primary" type="button">Save And Reboot</button>
+        </div>
+      </form>
+
+      <div class="actions">
+        <form>
+          <button class="secondary" type="button">Clear Saved Overrides</button>
+        </form>
+      </div>
+
+      <p class="hint">After saving, the device reboots and uses the new values immediately. The setup access point stays available at boot so you can make changes from a phone or laptop.</p>
+    </div>
+  </div>
+</body>
+</html>
