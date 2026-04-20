@@ -1,3 +1,8 @@
+/**
+ * Header file for device configuration portal.
+ * 
+ * Last edit: Nicholas Sardinia, 4/20/2026
+ */
 #pragma once
 
 #include <Arduino.h>

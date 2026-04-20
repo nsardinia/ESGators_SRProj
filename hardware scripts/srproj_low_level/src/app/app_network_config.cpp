@@ -1,7 +1,13 @@
+/**
+ * Handle firebase-backed radio network configuration info.
+ * 
+ * Last edit: Nicholas Sardinia, 4/20/2026
+ */
 #include "app_internal.h"
 
 namespace srproj {
 
+// Clear the network configuration
 void clearNetworkConfig(NetworkConfigState& cfg) {
   cfg.version = 0;
   cfg.nodeCount = 0;
@@ -10,6 +16,8 @@ void clearNetworkConfig(NetworkConfigState& cfg) {
   memset(cfg.gateways, 0, sizeof(cfg.gateways));
 }
 
+
+// helper for getting config information
 int findNodeConfigIndex(const NetworkConfigState& cfg, uint8_t nodeId) {
   for (size_t i = 0; i < cfg.nodeCount; ++i) {
     if (cfg.nodes[i].nodeId == nodeId) return static_cast<int>(i);
@@ -17,6 +25,7 @@ int findNodeConfigIndex(const NetworkConfigState& cfg, uint8_t nodeId) {
   return -1;
 }
 
+// helper for getting config information
 int findNodeConfigIndexByDeviceId(const NetworkConfigState& cfg, const char* deviceId) {
   if (!textHasValue(deviceId)) return -1;
   for (size_t i = 0; i < cfg.nodeCount; ++i) {
@@ -25,6 +34,8 @@ int findNodeConfigIndexByDeviceId(const NetworkConfigState& cfg, const char* dev
   return -1;
 }
 
+
+// validate that the gateway is listed in the network configuration
 void ensureGatewayListed(NetworkConfigState& cfg, const char* gatewayDeviceId) {
   if (!textHasValue(gatewayDeviceId)) return;
   for (size_t i = 0; i < cfg.gatewayCount; ++i) {
@@ -35,6 +46,8 @@ void ensureGatewayListed(NetworkConfigState& cfg, const char* gatewayDeviceId) {
   cfg.gatewayCount += 1;
 }
 
+
+// update or create the node network configuration
 void upsertNodeConfig(NetworkConfigState& cfg, const char* deviceId, uint8_t nodeId, MeshNodeRole role,
                       const char* preferredGatewayDevice, uint8_t preferredGatewayNode,
                       const char* fallbackGatewayDevice, uint8_t fallbackGatewayNode, bool enabled) {
@@ -57,6 +70,16 @@ void upsertNodeConfig(NetworkConfigState& cfg, const char* deviceId, uint8_t nod
   }
 }
 
+
+/**
+ * The following two functions determine what action the device
+ * will take based on its network configuration. 
+ * 
+ * Primarily, whether the device is in a radio network and if so,
+ * whether it is a gateway or a client node.
+ */
+
+// get the node configuration
 const NodeConfigEntry* getLocalNodeConfigEntry() {
   for (size_t i = 0; i < desiredConfig.nodeCount; ++i) {
     const NodeConfigEntry& entry = desiredConfig.nodes[i];
@@ -67,6 +90,7 @@ const NodeConfigEntry* getLocalNodeConfigEntry() {
   return nullptr;
 }
 
+// Apply the local configuration information
 void applyLocalNodeConfig(const char* source) {
   const NodeConfigEntry* localCfg = getLocalNodeConfigEntry();
   if (localCfg == nullptr) {
@@ -94,6 +118,7 @@ void applyLocalNodeConfig(const char* source) {
   makeLocalDeviceId();
 }
 
+// helper for parseing configuration json from firebase
 bool parseNetworkConfigJson(const String& json, NetworkConfigState& outCfg) {
   DynamicJsonDocument doc(8192);
   DeserializationError err = deserializeJson(doc, json);
@@ -159,6 +184,7 @@ bool isFirebaseNodeMissingPayload(const String& json) {
   return normalized.isEmpty() || normalized == "null";
 }
 
+//load the network configuration from the fallback json (depricated)
 bool loadNetworkConfigFromEnvJson() {
   String json = String(NETWORK_ENV_FALLBACK_JSON);
   Serial.println("Using in-memory network config JSON (SPIFFS disabled)");
@@ -171,6 +197,7 @@ bool loadNetworkConfigFromEnvJson() {
   return true;
 }
 
+//If radio network configuration is broken, load wifi-direct from fallback json
 void activateWifiDirectFallback(const char* source, const char* reason) {
   clearNetworkConfig(desiredConfig);
   applyLocalNodeConfig(source);
@@ -181,6 +208,7 @@ void activateWifiDirectFallback(const char* source, const char* reason) {
   }
 }
 
+//log the desired configuration for observability
 void dumpDesiredConfig() {
   Serial.printf("Desired config v%u nodes=%u gateways=%u\n",
                 static_cast<unsigned int>(desiredConfig.version),
@@ -196,6 +224,7 @@ void dumpDesiredConfig() {
   }
 }
 
+//update / create node addresses in the routing table
 void upsertNodeAddress(uint8_t nodeId, uint16_t address) {
   if (nodeId == 0 || address == 0) return;
   for (size_t i = 0; i < nodeAddressCount; ++i) {
@@ -272,6 +301,7 @@ bool hasRecentNodeContact(const NodeConfigEntry& entry, uint32_t now) {
   return now - entry.lastSeenMs <= NODE_STALE_TIMEOUT_MS;
 }
 
+//Find the address of a gateway from routing tables
 bool resolveGatewayAddress(const char* gatewayDeviceId, uint8_t gatewayNodeId, uint16_t& outAddr) {
   if (textHasValue(gatewayDeviceId)) {
     const NodeConfigEntry* gatewayCfg = findNodeConfigByDeviceId(gatewayDeviceId);
@@ -288,6 +318,7 @@ bool resolveGatewayAddress(const char* gatewayDeviceId, uint8_t gatewayNodeId, u
   return false;
 }
 
+//Lookup the current LoRaMesher routing information to reach some address.
 RouteSnapshot findRouteSnapshotByAddress(uint16_t address) {
   RouteSnapshot snapshot = {};
   if (address == 0) return snapshot;
@@ -313,6 +344,7 @@ RouteSnapshot findRouteSnapshotByAddress(uint16_t address) {
   return snapshot;
 }
 
+// json helper for uploading mesh statuses.
 void appendMeshNodeStatus(JsonArray& nodes, const char* deviceId, uint8_t nodeId, uint16_t address,
                           const char* status, const char* role, uint8_t hops, uint16_t viaAddr, uint8_t viaNodeId) {
   JsonObject node = nodes.add<JsonObject>();

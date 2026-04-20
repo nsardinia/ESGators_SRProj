@@ -1,24 +1,33 @@
+/**
+ * Header for radio protocol
+ * 
+ * Last edit: Nicholas Sardinia, 4/20/2026
+ */
 #pragma once
 
 #include <Arduino.h>
 
 namespace srproj {
 
+// Radio network parameters and constraints
 static const size_t MAX_DEVICE_ID_LEN = 48;
 static const size_t MAX_NETWORK_NODES = 32;
 static const size_t MAX_GATEWAYS = 8;
 
+// enum for type of message distrinction
 enum class MeshMsgType : uint8_t {
   Reading = 1,
   AppAck = 2,
   ConfigSync = 3,
 };
 
+// enum for node roles
 enum class MeshNodeRole : uint8_t {
   Client = 0,
   Gateway = 1,
 };
 
+// Radio message payload struct
 struct MeshPacketPayload {
   uint8_t msgType;
   uint8_t nodeId;
@@ -41,6 +50,7 @@ struct MeshPacketPayload {
   char deviceId[MAX_DEVICE_ID_LEN];
 };
 
+// Radio message reading struct
 struct GatewayReading {
   bool isTx;
   uint16_t localAddr;
@@ -61,6 +71,7 @@ struct GatewayReading {
   char sourceDeviceId[MAX_DEVICE_ID_LEN];
 };
 
+// configuration struct for radio uptime
 struct NodeConfigEntry {
   uint8_t nodeId;
   MeshNodeRole role;
@@ -74,6 +85,7 @@ struct NodeConfigEntry {
   uint32_t lastSeenMs;
 };
 
+// Network state struct
 struct NetworkConfigState {
   uint16_t version;
   size_t nodeCount;

@@ -1,3 +1,20 @@
+/**
+ * primary LoRa mesh networking functionality. The gateway
+ * broadcasts the network configuration, and clients
+ * apply this configuration in radio mode, facilitating radio
+ * network adjustment without wifi connection.
+ * 
+ * Sensor data destinations are chosen by LoRaMesher, with direct
+ * gateway connections preffered over multi-hop connections if possible.
+ * 
+ * Messages are sent to firebase (from gateway) and to other radio nodes
+ * (from client).
+ * 
+ * Currently, switching out of radio mode requires a restart.
+ * Switching to radio mode is seamless from the dashboard.
+ * 
+ * Last edit: 4/20/2026, Nicholas Sardinia
+ */
 #include "app_internal.h"
 
 namespace srproj {
@@ -68,11 +85,17 @@ void broadcastDesiredConfigIfDue(uint32_t now) {
   sendConfigSyncFrame(false, true, nullptr, seq++);
 }
 
+
+// Choose a destination for Tx packets
 uint16_t chooseDestination(bool& reliable) {
   reliable = false;
+  //if you shouldn't use radio, don't
   if (!shouldUseRadioNetwork()) return 0;
+
+  // for gateways, broadcast.
   if (getNodeRole() == NodeRole::Gateway) return BROADCAST_ADDR;
 
+  // transmit to the chosen gateway, primary and fallback.
   uint16_t addr = 0;
   if (resolveGatewayAddress(preferredGatewayDeviceId, preferredGatewayNodeId, addr)) {
     reliable = true;
@@ -83,6 +106,7 @@ uint16_t chooseDestination(bool& reliable) {
     return addr;
   }
 
+  //Find the closest gateway from LoRaMesher, transmit there
   RouteNode* closestGateway = LoraMesher::getClosestGateway();
   if (closestGateway != nullptr) {
     reliable = true;
@@ -91,6 +115,7 @@ uint16_t chooseDestination(bool& reliable) {
   return BROADCAST_ADDR;
 }
 
+// Rx radio
 void processReceivedPackets(void*) {
   for (;;) {
     ulTaskNotifyTake(pdPASS, portMAX_DELAY);
@@ -141,6 +166,7 @@ void processReceivedPackets(void*) {
   }
 }
 
+// Kickoff radio network RTOS tasks
 void createTasks() {
   BaseType_t rxRc = xTaskCreate(processReceivedPackets, "LM_RX", 6144, nullptr, 3, &receiveTaskHandle);
   if (rxRc != pdPASS) Serial.printf("Failed to create RX task (err=%d)\n", static_cast<int>(rxRc));
@@ -149,6 +175,7 @@ void createTasks() {
   if (fbRc != pdPASS) Serial.printf("Failed to create Firebase task (err=%d)\n", static_cast<int>(fbRc));
 }
 
+// Lora Mesher setup
 void setupLoRaMesher() {
   LoraMesher::LoraMesherConfig config;
   config.loraCs = LORA_SS;
@@ -171,6 +198,7 @@ void resetRoleTiming(NodeRole role) {
   lastSendMs = now - (role == NodeRole::Gateway ? GATEWAY_SEND_INTERVAL_MS : CLIENT_SEND_INTERVAL_MS);
 }
 
+// Apply role changes for pending roles
 void applyRoleChangeIfPending() {
   if (!applyPendingNodeRole()) return;
   syncLoRaRoleFlag();
@@ -179,6 +207,7 @@ void applyRoleChangeIfPending() {
   if (getNodeRole() == NodeRole::Client && shouldUseRadioNetwork()) firebaseReady = false;
 }
 
+// Transmissison
 void emitTxByRole(uint32_t now) {
   if (!radioConfigLoaded) {
     static uint32_t lastAwaitingConfigLogMs = 0;
@@ -257,6 +286,7 @@ void emitTxByRole(uint32_t now) {
   lastSendMs = now;
 }
 
+// Read commands from serial (untested)
 void parseSerialCommands() {
   while (Serial.available() > 0) {
     const char ch = static_cast<char>(Serial.read());

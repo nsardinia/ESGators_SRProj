@@ -1,3 +1,10 @@
+/**
+ * Defines shared headers for src/app to avoid code redundancy.
+ * Primarily helper functions and configuration constants for Firebase / LoraMesher,
+ * along with some basic parsing functions.
+ * 
+ * Last edit: Nicholas Sardinia, 4/20/2026
+ */
 #pragma once
 
 #include <Arduino.h>
@@ -17,6 +24,7 @@
 
 namespace srproj {
 
+// ifdefs for testing params
 #ifndef SR_NODE_ID
 #define SR_NODE_ID 1
 #endif
@@ -37,6 +45,7 @@ namespace srproj {
 #define SR_DEFAULT_DEVICE_SECRET "replace-with-device-secret"
 #endif
 
+//address and routing structs
 struct NodeAddressEntry {
   uint8_t nodeId;
   uint16_t address;
@@ -50,6 +59,7 @@ struct RouteSnapshot {
   uint8_t roleFlags;
 };
 
+// config params
 extern const uint8_t DEFAULT_GATEWAY_NODE_ID;
 extern const uint8_t LORA_SS;
 extern const uint8_t LORA_RST;
@@ -119,11 +129,13 @@ extern uint32_t firebaseFailedEvents;
 extern uint32_t lastFirebaseDiagMs;
 extern uint32_t lastMeshStatusPublishMs;
 
+//parsing helpers
 void copyDeviceId(char* dst, size_t dstLen, const char* src);
 bool textEquals(const char* lhs, const char* rhs);
 bool textHasValue(const char* value);
 bool parseOwnerFirebaseUidFromDeviceSecret(const char* deviceSecret, String& ownerUidOut);
 
+//Firebase and Lora pathing information
 String firebaseUserBasePath();
 String firebaseDeviceBasePath(const String& deviceId);
 String provisionedFirebaseDeviceBasePath();
@@ -134,6 +146,7 @@ const char* routeRoleName(uint8_t roleFlags);
 void syncLoRaRoleFlag();
 void makeLocalDeviceId();
 
+//Configuration (radio) helpers
 void clearNetworkConfig(NetworkConfigState& cfg);
 int findNodeConfigIndex(const NetworkConfigState& cfg, uint8_t nodeId);
 int findNodeConfigIndexByDeviceId(const NetworkConfigState& cfg, const char* deviceId);
@@ -156,7 +169,6 @@ bool isFirebaseNodeMissingPayload(const String& json);
 bool loadNetworkConfigFromEnvJson();
 void activateWifiDirectFallback(const char* source, const char* reason);
 void dumpDesiredConfig();
-
 void upsertNodeAddress(uint8_t nodeId, uint16_t address);
 bool lookupAddressByNodeId(uint8_t nodeId, uint16_t& out);
 bool lookupNodeIdByAddress(uint16_t address, uint8_t& outNodeId);
@@ -180,6 +192,7 @@ void appendMeshNodeStatus(
   uint8_t viaNodeId
 );
 
+//Firebase helpers
 bool isHttpsUrl(const String& url);
 void configureHttpClient(HTTPClient& http);
 String urlEncode(const String& input);
@@ -209,6 +222,7 @@ bool uploadMeshStatusSnapshot(uint32_t now);
 void queueFirebaseUploadEvent(bool isTx, uint16_t peerAddr, const MeshPacketPayload& payload, uint32_t eventAtMs);
 void firebaseUploaderTask(void*);
 
+//Logging, config, and general helpers.
 void applyConfigSyncPacket(const MeshPacketPayload& pkt);
 void sendConfigSyncFrame(bool isStart, bool isEnd, const NodeConfigEntry* entry, uint32_t seq);
 void broadcastDesiredConfigIfDue(uint32_t now);

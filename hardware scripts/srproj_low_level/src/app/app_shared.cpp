@@ -1,3 +1,8 @@
+/**
+ * Shared application utility functions and default configuration scheme.
+ * 
+ * Last edit: 4/20/2026, Nicholas Sardinia
+ */
 #include "app_internal.h"
 
 namespace srproj {
@@ -22,6 +27,8 @@ const uint32_t MESH_STATUS_PUBLISH_INTERVAL_MS = 3000;
 const uint32_t NODE_STALE_TIMEOUT_MS = 60000;
 const uint32_t FIREBASE_TASK_STACK_BYTES = 16384;
 
+
+//Fallback network ENV for testing radio control
 const char* NETWORK_ENV_FALLBACK_JSON = R"json(
 {
   "version": 1,
@@ -34,6 +41,10 @@ const char* NETWORK_ENV_FALLBACK_JSON = R"json(
 }
 )json";
 
+/* Defines default starter values for application. These will be overriden by values in NV storage.
+*  Note that firebase API key and database URL are protected by RTDB rules, so non-validated users
+*  cannot access secure information through these keys. 
+*/
 const char* DEFAULT_WIFI_SSID = "Nicks Iphone";
 const char* DEFAULT_WIFI_PASSWORD = "Smok73ey10!";
 const char* DEFAULT_BACKEND_BASE_URL = "https://srprojmwbe.fly.dev";

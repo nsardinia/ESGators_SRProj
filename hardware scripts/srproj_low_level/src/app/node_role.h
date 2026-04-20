@@ -1,3 +1,9 @@
+/**
+ * Header for node role changes. Roles are an enum, and methods
+ * are provided to facilitate clean role transfer
+ * 
+ * Last edit: Nicholas Sardinia, 4/20/2026
+ */
 #pragma once
 
 #include <Arduino.h>

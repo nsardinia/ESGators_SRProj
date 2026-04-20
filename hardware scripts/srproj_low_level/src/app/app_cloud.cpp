@@ -1,7 +1,13 @@
+/**
+ * Handles application interaction with cloud (firebase rtdb)
+ * 
+ * Last edit: Nicholas Sardinia, 4/20/2026
+ */
 #include "app_internal.h"
 
 namespace srproj {
 
+// Rate limiting for devices with minimal changes in data, reduces cost
 namespace {
 
 struct FirebaseThrottleSlot {
@@ -45,6 +51,7 @@ bool shouldQueueFirebaseUploadEvent(bool isTx, const MeshPacketPayload& payload,
 
 }  // namespace
 
+// HTTP helpers
 bool isHttpsUrl(const String& url) {
   return url.startsWith("https://");
 }
@@ -76,6 +83,7 @@ String urlEncode(const String& input) {
   return encoded;
 }
 
+// Log firebase vitals and ensure correct functioning
 void logFirebaseTaskVitals(const char* stage) {
   UBaseType_t stackWords = 0;
   if (firebaseTaskHandle != nullptr) stackWords = uxTaskGetStackHighWaterMark(firebaseTaskHandle);
@@ -85,6 +93,7 @@ void logFirebaseTaskVitals(const char* stage) {
                 static_cast<unsigned int>(stackWords * sizeof(StackType_t)));
 }
 
+// JSON post helper
 bool postJson(const String& url, const String& payload, int& statusCode, String& responseBody) {
   HTTPClient http;
   if (isHttpsUrl(url)) {
@@ -106,6 +115,7 @@ bool postJson(const String& url, const String& payload, int& statusCode, String&
   return true;
 }
 
+// form post helper
 bool postForm(const String& url, const String& payload, int& statusCode, String& responseBody) {
   HTTPClient http;
   if (isHttpsUrl(url)) {
@@ -131,6 +141,7 @@ bool postForm(const String& url, const String& payload, int& statusCode, String&
   return true;
 }
 
+// JSON helper
 bool putJson(const String& url, const String& payload, int& statusCode, String& responseBody) {
   HTTPClient http;
   if (isHttpsUrl(url)) {
@@ -152,6 +163,7 @@ bool putJson(const String& url, const String& payload, int& statusCode, String& 
   return true;
 }
 
+// JSON helper
 bool getJson(const String& url, int& statusCode, String& responseBody) {
   HTTPClient http;
   if (isHttpsUrl(url)) {
@@ -175,6 +187,7 @@ bool getJson(const String& url, int& statusCode, String& responseBody) {
   return true;
 }
 
+// Try to connect to the wifi network
 void kickWifiConnect() {
   const uint32_t now = millis();
   if (WiFi.status() == WL_CONNECTED || now - lastWifiAttemptMs < WIFI_RETRY_MS) return;
@@ -186,6 +199,7 @@ void kickWifiConnect() {
   WiFi.begin(cfg.wifiSsid, cfg.wifiPassword);
 }
 
+// Once connected to wifi, provision device codes from MWBE with the secrets provided.
 bool provisionDevice() {
   const DeviceConfigState& cfg = getDeviceConfig();
   const String endpoint = String(cfg.backendBaseUrl) + "/devices/provision";
@@ -216,6 +230,7 @@ bool provisionDevice() {
   return true;
 }
 
+// Once device custom token has been provisioned, give it to firebase and connect.
 bool signInToFirebaseWithCustomToken() {
   const DeviceConfigState& cfg = getDeviceConfig();
   const String endpoint =
@@ -246,6 +261,7 @@ bool signInToFirebaseWithCustomToken() {
   return true;
 }
 
+// Refresh firebase token if necessary for persistence, firebase requires refresh.
 bool refreshFirebaseIdToken() {
   if (firebaseRefreshToken.isEmpty()) return false;
   const String endpoint = String("https://securetoken.googleapis.com/v1/token?key=") + getDeviceConfig().firebaseApiKey;
@@ -268,6 +284,7 @@ bool refreshFirebaseIdToken() {
   return true;
 }
 
+// Validate firebase connection
 bool ensureFirebaseReady() {
   if (!firebaseReady) return false;
   const uint32_t now = millis();
@@ -275,6 +292,7 @@ bool ensureFirebaseReady() {
   return refreshFirebaseIdToken();
 }
 
+// Helper to write JSON to some firebase path
 bool writeJsonByPath(const String& dbPath, const String& payload) {
   if (!ensureFirebaseReady()) return false;
   const String url = String(getDeviceConfig().firebaseDatabaseUrl) + "/" + dbPath + ".json?auth=" + firebaseIdToken;
@@ -289,6 +307,7 @@ bool writeJsonByPath(const String& dbPath, const String& payload) {
   return statusCode >= 200 && statusCode < 300;
 }
 
+// Read from firebase to device (eg, for config)
 bool readJsonByPath(const String& dbPath, String& responseBody) {
   if (!ensureFirebaseReady()) return false;
   const String url = String(getDeviceConfig().firebaseDatabaseUrl) + "/" + dbPath + ".json?auth=" + firebaseIdToken;
@@ -302,6 +321,7 @@ bool readJsonByPath(const String& dbPath, String& responseBody) {
   return statusCode >= 200 && statusCode < 300;
 }
 
+// refresh radio network configuration (to change from wifi to radio)
 bool refreshRadioNetworkConfigFromCloud(bool force) {
   const uint32_t now = millis();
   if (!force) {
@@ -351,17 +371,21 @@ bool refreshRadioNetworkConfigFromCloud(bool force) {
   return true;
 }
 
+// Should this device use radio mode?
 bool shouldUseRadioNetwork() {
   return radioConfigLoaded && localDeviceInRadioNetwork;
 }
 
+// Should this device upload wifi-direct?
 bool shouldUploadDirectToFirebase() {
   return radioConfigLoaded && !localDeviceInRadioNetwork;
 }
 
+// helpers for temp / humidity values
 float decodeTemperatureC(const GatewayReading& msg) { return static_cast<float>(msg.temperatureCentiC) / 100.0f; }
 float decodeHumidityPct(const GatewayReading& msg) { return static_cast<float>(msg.humidityCentiPct) / 100.0f; }
 
+// JSON helper for sensor uploads.
 void appendSensorFields(JsonDocument& payloadDoc, const GatewayReading& msg) {
   payloadDoc["readingRaw"] = msg.readingRaw;
   payloadDoc["sensorFlags"] = msg.sensorFlags;
@@ -396,6 +420,7 @@ void appendSensorFields(JsonDocument& payloadDoc, const GatewayReading& msg) {
   soundLatest["unit"] = "adc_raw";
 }
 
+// JSON helper for sensor data
 void appendAggregateLatest(JsonDocument& payloadDoc, const GatewayReading& msg) {
   payloadDoc["no2Raw"] = msg.no2Raw;
   payloadDoc["no2MilliVolts"] = msg.no2MilliVolts;
@@ -407,6 +432,7 @@ void appendAggregateLatest(JsonDocument& payloadDoc, const GatewayReading& msg) 
   }
 }
 
+// write to firebase
 bool writeSensorBucketPayloads(const String& deviceBasePath, const GatewayReading& msg) {
   DynamicJsonDocument sht30Doc(256);
   JsonObject sht30Latest = sht30Doc.to<JsonObject>();
@@ -449,6 +475,7 @@ bool writeSensorBucketPayloads(const String& deviceBasePath, const GatewayReadin
   return true;
 }
 
+// write to firebase
 bool uploadDirectReading(const GatewayReading& msg) {
   const String deviceBasePath = provisionedFirebaseDeviceBasePath();
   if (deviceBasePath.isEmpty()) return false;
@@ -512,6 +539,7 @@ bool uploadReadingEvent(const GatewayReading& msg) {
   return writeSensorBucketPayloads(sourceDeviceBasePath, msg);
 }
 
+//Write to firebase from radio mesh
 bool uploadMeshStatusSnapshot(uint32_t now) {
   const String gatewayDeviceBasePath = provisionedFirebaseDeviceBasePath();
   if (gatewayDeviceBasePath.isEmpty() || !shouldUseRadioNetwork() || getNodeRole() != NodeRole::Gateway) return false;
@@ -563,6 +591,7 @@ bool uploadMeshStatusSnapshot(uint32_t now) {
   return writeJsonByPath(gatewayDeviceBasePath + "/meshStatus/latest", payload);
 }
 
+// Add event to the firebase queue for upload
 void queueFirebaseUploadEvent(bool isTx, uint16_t peerAddr, const MeshPacketPayload& payload, uint32_t eventAtMs) {
   if (firebaseQueue == nullptr) return;
   if (getNodeRole() != NodeRole::Gateway && !shouldUploadDirectToFirebase()) return;
@@ -593,6 +622,8 @@ void queueFirebaseUploadEvent(bool isTx, uint16_t peerAddr, const MeshPacketPayl
   }
 }
 
+// RTOS task for firebase uploads. 
+// Checks through status and radio config before making appropriate upload determination
 void firebaseUploaderTask(void*) {
   static const uint8_t MAX_UPLOAD_RETRIES = 4;
   for (;;) {

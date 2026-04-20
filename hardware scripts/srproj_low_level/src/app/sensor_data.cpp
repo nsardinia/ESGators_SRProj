@@ -1,3 +1,7 @@
+/**
+ * 
+ */
+
 #include "sensor_data.h"
 
 #include <Arduino.h>
@@ -9,6 +13,7 @@ namespace srproj {
 
 namespace {
 
+//set sensor read locations (pins and addresses). For now, assume all devices are the same. 
 static const uint8_t SHT30_ADDRESS = 0x44;
 static const uint16_t SHT30_MEASURE_HIGH_REPEATABILITY = 0x2C06;
 static const uint32_t SENSOR_SAMPLE_INTERVAL_MS = 1000;
@@ -18,11 +23,16 @@ static const uint8_t SHT30_SCL_PIN = A5;
 static const uint8_t NO2_PIN = A7;
 static const uint8_t SOUND_PIN = A1;
 
+// Setup I2C
 TwoWire& sensorWire = Wire;
+
+//Setup sensor snapshot with semaphore protection. Necessary to prevent simultaneous read / write.
 SemaphoreHandle_t sensorMutex = nullptr;
 TaskHandle_t sensorTaskHandle = nullptr;
 SensorSnapshot latestSnapshot = {};
 
+// Catch bad sensor values from I2C. If values fail CRC, the snapshot data will show as Invalid (N/A)
+// Added due to common wiring issues with the SHT30 necessitating verbose check. 
 uint8_t crc8Sht30(const uint8_t* data, size_t length) {
   uint8_t crc = 0xFF;
   for (size_t i = 0; i < length; ++i) {
@@ -36,6 +46,7 @@ uint8_t crc8Sht30(const uint8_t* data, size_t length) {
   return crc;
 }
 
+// Read from the temp / humidity sensor. 
 bool readSht30(float& temperatureC, float& humidityPct) {
   sensorWire.beginTransmission(SHT30_ADDRESS);
   sensorWire.write(static_cast<uint8_t>(SHT30_MEASURE_HIGH_REPEATABILITY >> 8));
@@ -68,6 +79,7 @@ bool readSht30(float& temperatureC, float& humidityPct) {
   return true;
 }
 
+// Store a snapshot so transmission can fetch it
 void storeSnapshot(const SensorSnapshot& snapshot) {
   if (sensorMutex == nullptr) return;
   if (xSemaphoreTake(sensorMutex, portMAX_DELAY) != pdTRUE) return;
@@ -75,6 +87,7 @@ void storeSnapshot(const SensorSnapshot& snapshot) {
   xSemaphoreGive(sensorMutex);
 }
 
+// Print a serial log of current sensor data snapshot
 void logSnapshot(const SensorSnapshot& snapshot) {
   Serial.printf("sensor ms=%lu", static_cast<unsigned long>(snapshot.updatedAtMs));
 
@@ -103,13 +116,19 @@ void logSnapshot(const SensorSnapshot& snapshot) {
   Serial.println();
 }
 
+// Sensor task control function 
 void sensorTask(void*) {
+
+  //Initialize an empty snapshot
   SensorSnapshot snapshot = {};
 
+  //Main loop
   for (;;) {
+    //Init timestamp and flags
     snapshot.updatedAtMs = millis();
     snapshot.flags = 0;
 
+    //tempt / humidity
     float temperatureC = 0.0f;
     float humidityPct = 0.0f;
     if (readSht30(temperatureC, humidityPct)) {
@@ -118,14 +137,17 @@ void sensorTask(void*) {
       snapshot.flags |= SENSOR_FLAG_SHT30_VALID;
     }
 
+    //NO2
     snapshot.no2Raw = static_cast<uint16_t>(analogRead(NO2_PIN));
     snapshot.no2MilliVolts = static_cast<uint16_t>(analogReadMilliVolts(NO2_PIN));
     snapshot.flags |= SENSOR_FLAG_NO2_VALID;
 
+    //Sound
     snapshot.soundRaw = static_cast<uint16_t>(analogRead(SOUND_PIN));
     snapshot.soundMilliVolts = static_cast<uint16_t>(analogReadMilliVolts(SOUND_PIN));
     snapshot.flags |= SENSOR_FLAG_SOUND_VALID;
 
+    //Store and log
     storeSnapshot(snapshot);
     logSnapshot(snapshot);
     vTaskDelay(pdMS_TO_TICKS(SENSOR_SAMPLE_INTERVAL_MS));
@@ -134,6 +156,7 @@ void sensorTask(void*) {
 
 }  // namespace
 
+// Setup sensors before readings start.
 void initSensorSubsystem() {
   sensorMutex = xSemaphoreCreateMutex();
   if (sensorMutex == nullptr) {
@@ -156,6 +179,7 @@ void initSensorSubsystem() {
   }
 }
 
+// Get the latest snapshot of sensor reads
 bool getLatestSensorSnapshot(SensorSnapshot& out) {
   if (sensorMutex == nullptr) return false;
   if (xSemaphoreTake(sensorMutex, pdMS_TO_TICKS(25)) != pdTRUE) return false;

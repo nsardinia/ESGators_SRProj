@@ -1,13 +1,23 @@
+/*
+  App.cpp initializes the application and kicks off processes, then transitions
+  to application loop mode. This behaviour is similar to arduinio IDE programs.
+
+  Last edit: Nicholas Sradinia, 4/20/2026
+*/
 #include "app.h"
 
 #include "app_internal.h"
 
 namespace srproj {
 
+//Kickoff application
 void appSetup() {
+
+  // Begin serial prints at 115200 baud
   Serial.begin(115200);
   delay(1500);
 
+  //Initialize application loops
   initNodeRole(SR_START_AS_GATEWAY ? NodeRole::Gateway : NodeRole::Client);
   initDeviceConfigPortal({
     DEFAULT_WIFI_SSID,
@@ -24,25 +34,34 @@ void appSetup() {
   radioConfigLoaded = false;
   initSensorSubsystem();
 
+  // Create message queue for firebase (FreeRTOS queue)
   firebaseQueue = xQueueCreate(FIREBASE_QUEUE_LEN, sizeof(GatewayReading));
   if (firebaseQueue == nullptr) Serial.println("Failed to create Firebase queue");
 
+  //Create remaining freeRTOS tasks
   createTasks();
+
+  //Setup LoRaMesher library
   setupLoRaMesher();
   resetRoleTiming(getNodeRole());
   Serial.printf("Boot nodeId=%u deviceId=%s role=%s (waiting for Firebase radio-network config)\n",
                 static_cast<unsigned int>(thisNodeId()), localDeviceId, nodeRoleName(getNodeRole()));
 }
 
+//Application control loop
 void appLoop() {
+
+  //Loop allows on-the-fly role changes, response to serial commands, and changes from the portal.
   serviceDeviceConfigPortal();
   parseSerialCommands();
   applyRoleChangeIfPending();
 
+  //Log the current role in a TX message (outbound)
   const uint32_t now = millis();
   broadcastDesiredConfigIfDue(now);
   emitTxByRole(now);
 
+  //Log / heartbeat message with debug prints
   static uint32_t lastAliveMs = 0;
   if (now - lastAliveMs >= 3000) {
     const char* mode =
@@ -59,7 +78,7 @@ void appLoop() {
                   static_cast<unsigned long>(firebaseFailedEvents));
     lastAliveMs = now;
   }
-
+  
   delay(5);
 }
 

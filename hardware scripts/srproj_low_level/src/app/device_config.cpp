@@ -1,3 +1,10 @@
+/**
+ * Device configuration portal. Allows the user to set configuration parameters
+ * from the device itself without modifying code. Keeps secure
+ * information out of repositories.
+ * 
+ * Last edit, Nicholas Sardinia, 4/20/2026
+ */
 #include "device_config.h"
 
 #include <Preferences.h>
@@ -22,6 +29,8 @@ bool g_portalStarted = false;
 bool g_restartPending = false;
 uint32_t g_restartAtMs = 0;
 
+
+// Safe c-string copy
 void copyText(char* dst, size_t dstLen, const char* src) {
   if (dstLen == 0) return;
   if (src == nullptr) {
@@ -32,6 +41,7 @@ void copyText(char* dst, size_t dstLen, const char* src) {
   dst[dstLen - 1] = '\0';
 }
 
+// Load default values (from compiled values) to the configuration.
 void loadDefaults() {
   copyText(g_config.wifiSsid, sizeof(g_config.wifiSsid), g_defaults.wifiSsid);
   copyText(g_config.wifiPassword, sizeof(g_config.wifiPassword), g_defaults.wifiPassword);
@@ -49,6 +59,7 @@ void readStringIfPresent(const char* key, char* dst, size_t dstLen) {
   copyText(dst, dstLen, value.c_str());
 }
 
+// Load values from nv key-value store (preferences) to configuration
 void loadStoredOverrides() {
   loadDefaults();
   readStringIfPresent("wifi_ssid", g_config.wifiSsid, sizeof(g_config.wifiSsid));
@@ -64,6 +75,7 @@ void loadStoredOverrides() {
   }
 }
 
+// Helper for HTML escape characters
 String htmlEscape(const char* input) {
   String out;
   if (input == nullptr) return out;
@@ -85,6 +97,7 @@ String apName() {
   return String("SRProj-Setup-Node-") + String(static_cast<unsigned int>(g_config.nodeId));
 }
 
+//Setup wifi access point
 void restartAccessPoint() {
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAPdisconnect(true);
@@ -92,6 +105,7 @@ void restartAccessPoint() {
   WiFi.softAP(apName().c_str(), kApPassword);
 }
 
+//Render HTML configuration page.
 String renderPage(const char* notice, bool success) {
   const String state = WiFi.status() == WL_CONNECTED ? "Connected" : "Not connected";
   const String stationIp = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("not assigned");
@@ -193,6 +207,7 @@ void handleNotFound() {
   g_server.send(302, "text/plain", "");
 }
 
+//Spin up the HTML portal.
 void startPortal() {
   if (g_portalStarted) return;
 
@@ -229,6 +244,7 @@ void serviceDeviceConfigPortal() {
   }
 }
 
+//Getters for config and id
 const DeviceConfigState& getDeviceConfig() {
   return g_config;
 }
