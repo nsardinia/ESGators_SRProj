@@ -5,45 +5,30 @@
  */
 #include "app_internal.h"
 
+#include "app_core.h"
+
 namespace srproj {
 
 // Clear the network configuration
 void clearNetworkConfig(NetworkConfigState& cfg) {
-  cfg.version = 0;
-  cfg.nodeCount = 0;
-  cfg.gatewayCount = 0;
-  memset(cfg.nodes, 0, sizeof(cfg.nodes));
-  memset(cfg.gateways, 0, sizeof(cfg.gateways));
+  coreClearNetworkConfig(cfg);
 }
 
 
 // helper for getting config information
 int findNodeConfigIndex(const NetworkConfigState& cfg, uint8_t nodeId) {
-  for (size_t i = 0; i < cfg.nodeCount; ++i) {
-    if (cfg.nodes[i].nodeId == nodeId) return static_cast<int>(i);
-  }
-  return -1;
+  return coreFindNodeConfigIndex(cfg, nodeId);
 }
 
 // helper for getting config information
 int findNodeConfigIndexByDeviceId(const NetworkConfigState& cfg, const char* deviceId) {
-  if (!textHasValue(deviceId)) return -1;
-  for (size_t i = 0; i < cfg.nodeCount; ++i) {
-    if (textEquals(cfg.nodes[i].deviceId, deviceId)) return static_cast<int>(i);
-  }
-  return -1;
+  return coreFindNodeConfigIndexByDeviceId(cfg, deviceId);
 }
 
 
 // validate that the gateway is listed in the network configuration
 void ensureGatewayListed(NetworkConfigState& cfg, const char* gatewayDeviceId) {
-  if (!textHasValue(gatewayDeviceId)) return;
-  for (size_t i = 0; i < cfg.gatewayCount; ++i) {
-    if (textEquals(cfg.gateways[i], gatewayDeviceId)) return;
-  }
-  if (cfg.gatewayCount >= MAX_GATEWAYS) return;
-  copyDeviceId(cfg.gateways[cfg.gatewayCount], sizeof(cfg.gateways[cfg.gatewayCount]), gatewayDeviceId);
-  cfg.gatewayCount += 1;
+  coreEnsureGatewayListed(cfg, gatewayDeviceId);
 }
 
 
@@ -51,23 +36,8 @@ void ensureGatewayListed(NetworkConfigState& cfg, const char* gatewayDeviceId) {
 void upsertNodeConfig(NetworkConfigState& cfg, const char* deviceId, uint8_t nodeId, MeshNodeRole role,
                       const char* preferredGatewayDevice, uint8_t preferredGatewayNode,
                       const char* fallbackGatewayDevice, uint8_t fallbackGatewayNode, bool enabled) {
-  int idx = findNodeConfigIndexByDeviceId(cfg, deviceId);
-  if (idx < 0 && nodeId != 0) idx = findNodeConfigIndex(cfg, nodeId);
-  if (idx < 0) {
-    if (cfg.nodeCount >= MAX_NETWORK_NODES) return;
-    idx = static_cast<int>(cfg.nodeCount++);
-  }
-  copyDeviceId(cfg.nodes[idx].deviceId, sizeof(cfg.nodes[idx].deviceId), deviceId);
-  cfg.nodes[idx].nodeId = nodeId;
-  cfg.nodes[idx].role = role;
-  cfg.nodes[idx].preferredGatewayId = preferredGatewayNode;
-  cfg.nodes[idx].fallbackGatewayId = fallbackGatewayNode;
-  copyDeviceId(cfg.nodes[idx].preferredGatewayDeviceId, sizeof(cfg.nodes[idx].preferredGatewayDeviceId), preferredGatewayDevice);
-  copyDeviceId(cfg.nodes[idx].fallbackGatewayDeviceId, sizeof(cfg.nodes[idx].fallbackGatewayDeviceId), fallbackGatewayDevice);
-  cfg.nodes[idx].enabled = enabled;
-  if (role == MeshNodeRole::Gateway) {
-    ensureGatewayListed(cfg, textHasValue(deviceId) ? deviceId : preferredGatewayDevice);
-  }
+  coreUpsertNodeConfig(cfg, deviceId, nodeId, role, preferredGatewayDevice, preferredGatewayNode,
+                       fallbackGatewayDevice, fallbackGatewayNode, enabled);
 }
 
 
@@ -226,37 +196,15 @@ void dumpDesiredConfig() {
 
 //update / create node addresses in the routing table
 void upsertNodeAddress(uint8_t nodeId, uint16_t address) {
-  if (nodeId == 0 || address == 0) return;
-  for (size_t i = 0; i < nodeAddressCount; ++i) {
-    if (nodeAddressTable[i].nodeId == nodeId) {
-      nodeAddressTable[i].address = address;
-      return;
-    }
-  }
-  if (nodeAddressCount >= MAX_NETWORK_NODES) return;
-  nodeAddressTable[nodeAddressCount].nodeId = nodeId;
-  nodeAddressTable[nodeAddressCount].address = address;
-  nodeAddressCount += 1;
+  coreUpsertNodeAddress(nodeAddressTable, nodeAddressCount, nodeId, address);
 }
 
 bool lookupAddressByNodeId(uint8_t nodeId, uint16_t& out) {
-  for (size_t i = 0; i < nodeAddressCount; ++i) {
-    if (nodeAddressTable[i].nodeId == nodeId) {
-      out = nodeAddressTable[i].address;
-      return true;
-    }
-  }
-  return false;
+  return coreLookupAddressByNodeId(nodeAddressTable, nodeAddressCount, nodeId, out);
 }
 
 bool lookupNodeIdByAddress(uint16_t address, uint8_t& outNodeId) {
-  for (size_t i = 0; i < nodeAddressCount; ++i) {
-    if (nodeAddressTable[i].address == address) {
-      outNodeId = nodeAddressTable[i].nodeId;
-      return true;
-    }
-  }
-  return false;
+  return coreLookupNodeIdByAddress(nodeAddressTable, nodeAddressCount, address, outNodeId);
 }
 
 NodeConfigEntry* findMutableNodeConfigByDeviceId(const char* deviceId) {
@@ -295,10 +243,7 @@ void noteNodeSeen(const char* deviceId, uint8_t nodeId, uint16_t address, uint32
 }
 
 bool hasRecentNodeContact(const NodeConfigEntry& entry, uint32_t now) {
-  if (!entry.enabled) return false;
-  if (textHasValue(entry.deviceId) && textEquals(entry.deviceId, localDeviceId)) return true;
-  if (entry.lastSeenMs == 0) return false;
-  return now - entry.lastSeenMs <= NODE_STALE_TIMEOUT_MS;
+  return coreHasRecentNodeContact(entry, localDeviceId, now, NODE_STALE_TIMEOUT_MS);
 }
 
 //Find the address of a gateway from routing tables

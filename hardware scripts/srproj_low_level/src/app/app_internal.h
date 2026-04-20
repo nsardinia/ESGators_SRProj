@@ -45,12 +45,6 @@ namespace srproj {
 #define SR_DEFAULT_DEVICE_SECRET "replace-with-device-secret"
 #endif
 
-//address and routing structs
-struct NodeAddressEntry {
-  uint8_t nodeId;
-  uint16_t address;
-};
-
 struct RouteSnapshot {
   bool found;
   uint16_t address;

@@ -5,6 +5,8 @@
  */
 #include "app_internal.h"
 
+#include "app_core.h"
+
 namespace srproj {
 
 const uint8_t DEFAULT_GATEWAY_NODE_ID = SR_GATEWAY_NODE_ID;
@@ -94,39 +96,22 @@ uint32_t lastFirebaseDiagMs = 0;
 uint32_t lastMeshStatusPublishMs = 0;
 
 void copyDeviceId(char* dst, size_t dstLen, const char* src) {
-  if (dstLen == 0) return;
-  if (src == nullptr) {
-    dst[0] = '\0';
-    return;
-  }
-  strncpy(dst, src, dstLen - 1);
-  dst[dstLen - 1] = '\0';
+  coreCopyDeviceId(dst, dstLen, src);
 }
 
 bool textEquals(const char* lhs, const char* rhs) {
-  if (lhs == nullptr || rhs == nullptr) return false;
-  return strcmp(lhs, rhs) == 0;
+  return coreTextEquals(lhs, rhs);
 }
 
 bool textHasValue(const char* value) {
-  return value != nullptr && value[0] != '\0';
+  return coreTextHasValue(value);
 }
 
 bool parseOwnerFirebaseUidFromDeviceSecret(const char* deviceSecret, String& ownerUidOut) {
-  ownerUidOut = "";
-  if (!textHasValue(deviceSecret)) return false;
-
-  const String secret = String(deviceSecret);
-  const int firstDot = secret.indexOf('.');
-  if (firstDot <= 0) return false;
-
-  const int secondDot = secret.indexOf('.', firstDot + 1);
-  if (secondDot <= firstDot + 1) return false;
-  if (secret.substring(0, firstDot) != "esg1") return false;
-
-  ownerUidOut = secret.substring(firstDot + 1, secondDot);
-  ownerUidOut.trim();
-  return !ownerUidOut.isEmpty();
+  std::string parsedOwnerUid;
+  const bool ok = coreParseOwnerFirebaseUid(deviceSecret, parsedOwnerUid);
+  ownerUidOut = ok ? String(parsedOwnerUid.c_str()) : "";
+  return ok;
 }
 
 String firebaseUserBasePath() {
@@ -154,17 +139,7 @@ const char* meshRoleName(MeshNodeRole role) {
 }
 
 bool parseMeshRole(const String& roleString, MeshNodeRole& roleOut) {
-  String roleLower = roleString;
-  roleLower.toLowerCase();
-  if (roleLower == "gateway") {
-    roleOut = MeshNodeRole::Gateway;
-    return true;
-  }
-  if (roleLower == "client") {
-    roleOut = MeshNodeRole::Client;
-    return true;
-  }
-  return false;
+  return coreParseMeshRole(roleString.c_str(), roleOut);
 }
 
 const char* routeRoleName(uint8_t roleFlags) {
