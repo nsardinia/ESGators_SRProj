@@ -1,4 +1,14 @@
-import { buildNodesWithLocations, formatCoordinateLabel, getNodeLocation, GAINESVILLE_FALLBACK } from "./nodeLocations"
+/**
+ * Test coverage for node location logic.
+ * 
+ * Last edit: Nicholas Sardinia, 4/20/2026
+ */
+import {
+  GAINESVILLE_FALLBACK,
+  buildNodesWithLocations,
+  formatCoordinateLabel,
+  getNodeLocation,
+} from "@/lib/nodeLocations"
 
 describe("nodeLocations", () => {
   it("uses a stored node location when one exists", () => {
@@ -21,7 +31,7 @@ describe("nodeLocations", () => {
     })
   })
 
-  it("falls back to Gainesville and marks the location as unknown when no location is set", () => {
+  it("falls back to Gainesville when a node has no saved coordinates", () => {
     const nodes = buildNodesWithLocations([{ id: "node-2", name: "Fallback node" }], {}).nodes
 
     expect(nodes).toHaveLength(1)
@@ -34,7 +44,7 @@ describe("nodeLocations", () => {
     })
   })
 
-  it("formats coordinate labels with four decimal places", () => {
+  it("formats map coordinate labels with four decimal places", () => {
     expect(formatCoordinateLabel(29.6516123, -82.3248123)).toBe("29.6516, -82.3248")
   })
 })

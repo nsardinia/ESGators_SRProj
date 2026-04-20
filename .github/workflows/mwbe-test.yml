@@ -1,0 +1,28 @@
+name: MWBE Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-mwbe:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: mwbe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mwbe/package-lock.json
+
+      - name: Install MWBE dependencies
+        run: npm ci
+
+      - name: Run MWBE tests
+        run: npm test

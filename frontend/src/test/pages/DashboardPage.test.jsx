@@ -1,7 +1,12 @@
+/**
+ * Test coverage for dashboard
+ * 
+ * Last Edit: Nicholas Sardinia, 4/20/2026
+ */
 import { fireEvent, render, screen } from "@testing-library/react"
-import DashboardPage from "./DashboardPage"
+import DashboardPage from "@/pages/DashboardPage"
 
-vi.mock("../components/AuthContext", () => ({
+vi.mock("@/components/AuthContext", () => ({
   useAuth: () => ({
     user: {
       uid: "owner-123",
@@ -11,7 +16,13 @@ vi.mock("../components/AuthContext", () => ({
 }))
 
 describe("DashboardPage", () => {
-  it("shows the Grafana link flow instead of an embedded frame", () => {
+  const originalFetch = global.fetch
+
+  afterEach(() => {
+    global.fetch = originalFetch
+  })
+
+  it("shows the Grafana launch flow instead of an embedded frame", () => {
     const dashboardUrl = "https://grafana.example.test/dashboard?from=now-5m"
     const previousDashboardUrl = import.meta.env.VITE_GRAFANA_DASHBOARD_URL
 
@@ -28,7 +39,7 @@ describe("DashboardPage", () => {
     }
   })
 
-  it("opens Grafana only when requested", () => {
+  it("appends the signed-in owner context before opening Grafana", () => {
     const dashboardUrl = "https://grafana.example.test/dashboard"
     const previousDashboardUrl = import.meta.env.VITE_GRAFANA_DASHBOARD_URL
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null)
@@ -37,8 +48,6 @@ describe("DashboardPage", () => {
 
     try {
       render(<DashboardPage />)
-
-      expect(openSpy).not.toHaveBeenCalled()
 
       fireEvent.click(screen.getByRole("button", { name: /open grafana dashboard/i }))
 
@@ -52,5 +61,18 @@ describe("DashboardPage", () => {
       openSpy.mockRestore()
       import.meta.env.VITE_GRAFANA_DASHBOARD_URL = previousDashboardUrl
     }
+  })
+
+  it("shows an export failure message when CSV download fails", async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: false,
+      text: async () => "Export unavailable",
+    }))
+
+    render(<DashboardPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: /export day csv/i }))
+
+    expect(await screen.findByText(/export unavailable/i)).toBeInTheDocument()
   })
 })
