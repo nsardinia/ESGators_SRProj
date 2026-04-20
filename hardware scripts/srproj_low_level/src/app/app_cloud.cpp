@@ -5,6 +5,8 @@
  */
 #include "app_internal.h"
 
+#include "app_core.h"
+
 namespace srproj {
 
 // Rate limiting for devices with minimal changes in data, reduces cost
@@ -63,24 +65,8 @@ void configureHttpClient(HTTPClient& http) {
 }
 
 String urlEncode(const String& input) {
-  const char* hex = "0123456789ABCDEF";
-  String encoded;
-  for (size_t i = 0; i < input.length(); i += 1) {
-    const char current = input[i];
-    const bool safeChar =
-      (current >= 'a' && current <= 'z') ||
-      (current >= 'A' && current <= 'Z') ||
-      (current >= '0' && current <= '9') ||
-      current == '-' || current == '_' || current == '.' || current == '~';
-    if (safeChar) {
-      encoded += current;
-      continue;
-    }
-    encoded += '%';
-    encoded += hex[(current >> 4) & 0x0F];
-    encoded += hex[current & 0x0F];
-  }
-  return encoded;
+  const std::string encoded = coreUrlEncode(input.c_str());
+  return String(encoded.c_str());
 }
 
 // Log firebase vitals and ensure correct functioning
